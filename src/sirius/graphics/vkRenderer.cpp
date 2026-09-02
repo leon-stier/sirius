@@ -3,12 +3,15 @@
 //
 #include "vkRenderer.h"
 
-import vulkan_hpp;
+#include <iostream>
+
+import vulkan;
 
 
 namespace sirius {
 
 void VkRenderer::Init() {
+    std::cout << "TEST" << std::endl;
 }
 
 void VkRenderer::Draw() {

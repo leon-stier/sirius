@@ -7,7 +7,7 @@ namespace sirius {
 VkRenderer Renderer::vkRenderer_;
 
 void Renderer::Init() {
-    vkRenderer_.Init();
+    vkRenderer_. Init();
 }
 
 void Renderer::Draw() {

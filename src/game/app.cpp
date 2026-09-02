@@ -3,6 +3,7 @@
 #include <iostream>
 #include <optional>
 
+#include "graphics/renderer.h"
 #include "window/window.h"
 #include "window/wndProc.h"
 
@@ -23,6 +24,13 @@ Fsm::FsmReturn App::UpdateState(signed short state) {
 Fsm::FsmReturn App::Init() {
     if (!hwndMain) {
         hwndMain = sirius::SrsWindow::CreateDeviceWindow();
+    }
+    try {
+        sirius::Renderer::Init();
+    } catch (const std::exception& e) {
+        std::cerr << "Exception while initializing Renderer: " << e.what() << std::endl;
+        SetState(kShutdownSystem);
+        return kExit;
     }
     SetState(kRunGame);
     return kContinue;
