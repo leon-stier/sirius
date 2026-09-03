@@ -1,11 +1,11 @@
-//
-// Created by Leon on 02/09/2026.
-//
 #include "vkRenderer.h"
 
 #include <iostream>
-
+#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
+#	include <vulkan/vulkan_raii.hpp>
+#else
 import vulkan;
+#endif
 
 
 namespace sirius {
