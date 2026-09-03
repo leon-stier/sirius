@@ -29,6 +29,8 @@ if(ENABLE_CPP20_MODULE)
             PUBLIC
             VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
             VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+            VK_USE_PLATFORM_WIN32_KHR
+            VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING
     )
     target_include_directories(VulkanCppModule PUBLIC "${Vulkan_INCLUDE_DIR}")
     target_link_libraries(VulkanCppModule PUBLIC Vulkan::Vulkan)

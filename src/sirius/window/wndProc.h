@@ -6,7 +6,7 @@
 
 
 #define WIN32_LEAN_AND_MEAN
-#include <string>
+#define NOMINMAX
 #include <Windows.h>
 
 
@@ -16,7 +16,7 @@ inline HWND hwndMain = nullptr;
 inline HINSTANCE hInstance = nullptr;
 inline unsigned winClass;
 
-inline std::string windowTitle;
+inline std::string windowTitle{"Sirius"};
 inline uint32_t windowWidth = 800;
 inline uint32_t windowHeight = 600;
 inline bool closing = false;
