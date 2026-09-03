@@ -12,6 +12,7 @@ void VkRenderer::Init() {
     CreateSurface();
     PickPhysicalDevice();
     CreateLogicalDevice();
+    CreateSwapChain();
 }
 
 void VkRenderer::Draw() {
@@ -171,6 +172,84 @@ void VkRenderer::CreateLogicalDevice() {
 
     device_ = vk::raii::Device(physicalDevice_, deviceCreateInfo);
     queue_ = vk::raii::Queue(device_, graphicsIndex, 0);
+}
+
+void VkRenderer::CreateSwapChain() {
+    const auto surfaceCapabilities = physicalDevice_.getSurfaceCapabilitiesKHR(*surface_);
+    swapChainExtent_ = ChooseSwapExtent(surfaceCapabilities);
+    const uint32_t minImageCount = ChooseSwapMinImageCount(surfaceCapabilities);
+
+    const std::vector availableFormats = physicalDevice_.getSurfaceFormatsKHR(*surface_);
+    swapChainSurfaceFormat_ = ChooseSwapSurfaceFormat(availableFormats);
+
+    const std::vector availablePresentModes = physicalDevice_.getSurfacePresentModesKHR(*surface_);
+    const vk::PresentModeKHR presentMode = ChooseSwapPresentMode(availablePresentModes);
+
+    const vk::SwapchainCreateInfoKHR swapChainCreateInfo{
+        .surface = *surface_,
+        .minImageCount = minImageCount,
+        .imageFormat = swapChainSurfaceFormat_.format,
+        .imageColorSpace = swapChainSurfaceFormat_.colorSpace,
+        .imageExtent = swapChainExtent_,
+        .imageArrayLayers = 1,
+        .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+        .imageSharingMode = vk::SharingMode::eExclusive,
+        .preTransform = surfaceCapabilities.currentTransform,
+        .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+        .presentMode = presentMode,
+        .clipped = true
+    };
+
+    swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
+    swapChainImages_ = swapChain_.getImages();
+}
+
+vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const& availableFormats) {
+    const auto formatIt = std::ranges::find_if(availableFormats,[](const auto &format) {
+        return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+    });
+    return formatIt != availableFormats.end() ? *formatIt : availableFormats.front();
+}
+/*
+ * Fifo:    First-in-first-out queue to which the program submits frames. They are presented in that order while waiting for a vertical blank for each presentation
+ * Mailbox: Fifo but if the display is waiting for the program (queue empty), present the next frame as soon as it's available without waiting for a vertical blank
+ * Pick mailbox if it's available, use Fifo as a fallback. Fifo is guaranteed to be available
+ */
+vk::PresentModeKHR VkRenderer::ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const& availablePresentModes) {
+    return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) {
+        return vk::PresentModeKHR::eMailbox == value;
+    }) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+}
+
+/*
+ * A currentExtent of 0xFFFFFFFF (max of uin32_t) indicates that the extent is not dictated by the window manager, we set it ourselves
+ * We set it to something that works well for the window
+ * Relevant for high-dpi displays where window coordinates differ from pixel dimensions
+ */
+vk::Extent2D VkRenderer::ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const& capabilities) {
+    if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+    {
+        return capabilities.currentExtent;
+    }
+    RECT rect{};
+    GetClientRect(hwndMain, &rect);
+
+    const auto width  = static_cast<uint32_t>(rect.right - rect.left);
+    const auto height = static_cast<uint32_t>(rect.bottom - rect.top);
+
+    return vk::Extent2D{
+        .width  = std::clamp(width,  capabilities.minImageExtent.width,  capabilities.maxImageExtent.width),
+        .height = std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
+    };
+}
+
+uint32_t VkRenderer::ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& capabilities) {
+    auto minImageCount = std::max(3u, capabilities.minImageCount);
+    if ((0 < capabilities.maxImageCount) && (capabilities.maxImageCount < minImageCount))
+    {
+        minImageCount = capabilities.maxImageCount;
+    }
+    return minImageCount;
 }
 
 void VkRenderer::SetupDebugMessenger() {
