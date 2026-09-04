@@ -13,6 +13,8 @@ void VkRenderer::Init() {
     PickPhysicalDevice();
     CreateLogicalDevice();
     CreateSwapChain();
+    CreateImageViews();
+    CreateGraphicsPipeline();
 }
 
 void VkRenderer::Draw() {
@@ -50,7 +52,7 @@ void VkRenderer::CreateInstance() {
     // Verify layer support & throw directly if any layer is missing
     auto layerProperties = context_.enumerateInstanceLayerProperties();
 
-    if (const auto it = std::ranges::find_if_not(requiredLayers, [&layerProperties](std::string_view required) {
+    if (const auto it = std::ranges::find_if_not(requiredLayers, [&layerProperties](const std::string_view required) {
         return std::ranges::contains(layerProperties, required, [](const auto& prop) {
             return std::string_view(prop.layerName);
         });
@@ -86,11 +88,8 @@ void VkRenderer::PickPhysicalDevice() {
 }
 
 bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
-    auto deviceProperties = physicalDevice.getProperties();
-    auto deviceFeatures = physicalDevice.getFeatures();
-
     // 1. API version check
-    bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+    bool supportsVulkan13 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
 
     // 2. Queue family check
     auto queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -98,7 +97,7 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
         return static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
     });
 
-    std::vector<const char*> requiredDeviceExtensions{
+    std::vector requiredDeviceExtensions{
         vk::KHRSwapchainExtensionName
     };
 
@@ -122,7 +121,7 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
         features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
         features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
         features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
-    return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+    return supportsVulkan13 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
 
 }
 
@@ -250,6 +249,29 @@ uint32_t VkRenderer::ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& c
         minImageCount = capabilities.maxImageCount;
     }
     return minImageCount;
+}
+
+void VkRenderer::CreateImageViews() {
+    vk::ImageViewCreateInfo imageViewCreateInfo {
+        .viewType = vk::ImageViewType::e2D,
+        .format = swapChainSurfaceFormat_.format,
+        .subresourceRange = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+
+    for (auto &image : swapChainImages_) {
+        imageViewCreateInfo.image = image;
+        swapChainImageViews_.emplace_back(device_, imageViewCreateInfo);
+    }
+}
+
+void VkRenderer::CreateGraphicsPipeline() {
+
 }
 
 void VkRenderer::SetupDebugMessenger() {
