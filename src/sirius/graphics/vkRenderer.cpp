@@ -15,9 +15,90 @@ void VkRenderer::Init() {
     CreateSwapChain();
     CreateImageViews();
     CreateGraphicsPipeline();
+    InitCommandBuffers();
+    CreateSyncObjects();
 }
 
 void VkRenderer::Draw() {
+    const uint32_t frameIndex = frameIndex_++ % kMaxFramesInFlight;
+    const uint64_t signalValue = nextSignalValue_++;
+    const uint64_t waitValue = signalValue - kMaxFramesInFlight;
+
+    const vk::Semaphore semHandle = *timelineSemaphore_;
+
+    vk::SemaphoreWaitInfo waitInfo {
+        .flags = {},
+        .semaphoreCount = 1,
+        .pSemaphores = &semHandle,
+        .pValues = &waitValue
+    };
+    const vk::Result waitResult{ device_.waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max()) };
+    if (waitResult != vk::Result::eSuccess) {
+        // Handle unexpected results (e.g., eTimeout or device loss)
+        throw std::runtime_error("Failed or timed out waiting for timeline semaphore!");
+    }
+
+    auto [acquireResult, imageIndex] = swapChain_.acquireNextImage(std::numeric_limits<uint64_t>::max(), *frames_[frameIndex].imageAcquiredSemaphore, nullptr);
+    // Result can also indicate out of date images
+    if (acquireResult != vk::Result::eSuccess) {
+        throw std::runtime_error("Failed to acquire next image!");
+    }
+
+    RecordCommandBuffer(imageIndex, frameIndex);
+
+    const vk::SemaphoreSubmitInfo imageAcquireWaitInfo {
+        .semaphore = *frames_[frameIndex].imageAcquiredSemaphore,
+        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput
+    };
+
+    const std::array<vk::SemaphoreSubmitInfo, 2> semaphoreSignals{{
+        {
+            .semaphore = *renderCompleteSemaphores_[imageIndex],
+            .stageMask = vk::PipelineStageFlagBits2::eAllGraphics
+        },
+        {
+            .semaphore = *timelineSemaphore_,
+            .value     = signalValue,
+            .stageMask = vk::PipelineStageFlagBits2::eAllCommands
+        }
+    }};
+
+    const vk::CommandBufferSubmitInfo cmdSubmitInfo{
+        .commandBuffer = *frames_.at(frameIndex).commandBuffer
+    };
+
+    // 2. Modern SubmitInfo2
+    const vk::SubmitInfo2 submitInfo{
+        .waitSemaphoreInfoCount   = 1,
+        .pWaitSemaphoreInfos      = &imageAcquireWaitInfo,
+        .commandBufferInfoCount   = 1,
+        .pCommandBufferInfos      = &cmdSubmitInfo,
+        .signalSemaphoreInfoCount = static_cast<uint32_t>(semaphoreSignals.size()),
+        .pSignalSemaphoreInfos    = semaphoreSignals.data()
+    };
+
+    // 3. Modern Queue Submit
+    graphicsQueue_.submit2(submitInfo, nullptr);
+
+    const vk::PresentInfoKHR presentInfoKHR{
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores    = &*renderCompleteSemaphores_[imageIndex],
+        .swapchainCount     = 1,
+        .pSwapchains        = &*swapChain_,
+        .pImageIndices      = &imageIndex};
+
+    vk::Result presentResult = graphicsQueue_.presentKHR(presentInfoKHR);
+
+    switch (presentResult)
+    {
+        case vk::Result::eSuccess:
+            break;
+        case vk::Result::eSuboptimalKHR:
+            std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+            break;
+        default:
+            break;        // an unexpected result is returned!
+    }
 }
 
 void VkRenderer::CreateInstance() {
@@ -38,14 +119,14 @@ void VkRenderer::CreateInstance() {
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
-    if (enableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
+    if (kEnableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
 
     instanceCreateInfo.enabledExtensionCount = requiredExtensions.size();
     instanceCreateInfo.ppEnabledExtensionNames = requiredExtensions.data();
 
     // Get validation layers
     std::vector<char const*> requiredLayers;
-    if (enableValidationLayers) {
+    if (kEnableValidationLayers) {
         requiredLayers.assign(kValidationLayers.begin(), kValidationLayers.end());
     }
 
@@ -115,12 +196,11 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
     >();
 
     bool supportsRequiredFeatures =
-        features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
-        features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-        features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
-        features.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5;
+            features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+            features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+            features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+            features.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5;
     return supportsVulkan13 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
-
 }
 
 void VkRenderer::CreateLogicalDevice() {
@@ -132,7 +212,7 @@ void VkRenderer::CreateLogicalDevice() {
         auto [index, qfp] = tuple;
 
         const bool supportsGraphics = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
-        const bool supportsSurface  = physicalDevice_.getSurfaceSupportKHR(static_cast<uint32_t>(index), *surface_);
+        const bool supportsSurface = physicalDevice_.getSurfaceSupportKHR(static_cast<uint32_t>(index), *surface_);
 
         return supportsGraphics && supportsSurface;
     });
@@ -141,24 +221,25 @@ void VkRenderer::CreateLogicalDevice() {
         throw std::runtime_error("Failed to find a queue family supporting graphics and presentation!");
     }
 
-    const uint32_t graphicsIndex = static_cast<uint32_t>(std::get<0>(*it));
+    graphicsQueueIndex_ = static_cast<uint32_t>(std::get<0>(*it));
 
-    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, vk::PhysicalDeviceMaintenance5FeaturesKHR> featureChain = {
-        {},                                    // vk::PhysicalDeviceFeatures2
-        {.shaderDrawParameters = true},        // vk::PhysicalDeviceVulkan11Features
-        {.dynamicRendering = true},            // vk::PhysicalDeviceVulkan13Features
-        {.extendedDynamicState = true},         // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, vk::PhysicalDeviceMaintenance5FeaturesKHR> featureChain = {
+        {}, // vk::PhysicalDeviceFeatures2
+        {.shaderDrawParameters = true}, // vk::PhysicalDeviceVulkan11Features
+        {.timelineSemaphore = true},
+        {.dynamicRendering = true}, // vk::PhysicalDeviceVulkan13Features
+        {.extendedDynamicState = true}, // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
         {.maintenance5 = true}
     };
 
     float queuePriority = 0.5f;
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-        .queueFamilyIndex = graphicsIndex,
+        .queueFamilyIndex = graphicsQueueIndex_,
         .queueCount = 1,
         .pQueuePriorities = &queuePriority
     };
 
-    vk::PhysicalDeviceFeatures deviceFeatures{};    // Filled as features are needed
+    vk::PhysicalDeviceFeatures deviceFeatures{}; // Filled as features are needed
 
     vk::DeviceCreateInfo deviceCreateInfo{
         .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
@@ -169,7 +250,7 @@ void VkRenderer::CreateLogicalDevice() {
     };
 
     device_ = vk::raii::Device(physicalDevice_, deviceCreateInfo);
-    queue_ = vk::raii::Queue(device_, graphicsIndex, 0);
+    graphicsQueue_ = vk::raii::Queue(device_, graphicsQueueIndex_, 0);
 }
 
 void VkRenderer::CreateSwapChain() {
@@ -203,11 +284,12 @@ void VkRenderer::CreateSwapChain() {
 }
 
 vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const& availableFormats) {
-    const auto formatIt = std::ranges::find_if(availableFormats,[](const auto &format) {
+    const auto formatIt = std::ranges::find_if(availableFormats, [](const auto& format) {
         return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
     });
     return formatIt != availableFormats.end() ? *formatIt : availableFormats.front();
 }
+
 /*
  * Fifo:    First-in-first-out queue to which the program submits frames. They are presented in that order while waiting for a vertical blank for each presentation
  * Mailbox: Fifo but if the display is waiting for the program (queue empty), present the next frame as soon as it's available without waiting for a vertical blank
@@ -216,7 +298,9 @@ vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::Surface
 vk::PresentModeKHR VkRenderer::ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const& availablePresentModes) {
     return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) {
         return vk::PresentModeKHR::eMailbox == value;
-    }) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+    })
+               ? vk::PresentModeKHR::eMailbox
+               : vk::PresentModeKHR::eFifo;
 }
 
 /*
@@ -225,33 +309,31 @@ vk::PresentModeKHR VkRenderer::ChooseSwapPresentMode(std::vector<vk::PresentMode
  * Relevant for high-dpi displays where window coordinates differ from pixel dimensions
  */
 vk::Extent2D VkRenderer::ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const& capabilities) {
-    if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
-    {
+    if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         return capabilities.currentExtent;
     }
     RECT rect{};
     GetClientRect(hwndMain, &rect);
 
-    const auto width  = static_cast<uint32_t>(rect.right - rect.left);
+    const auto width = static_cast<uint32_t>(rect.right - rect.left);
     const auto height = static_cast<uint32_t>(rect.bottom - rect.top);
 
     return vk::Extent2D{
-        .width  = std::clamp(width,  capabilities.minImageExtent.width,  capabilities.maxImageExtent.width),
+        .width = std::clamp(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
         .height = std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
     };
 }
 
 uint32_t VkRenderer::ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& capabilities) {
     auto minImageCount = std::max(3u, capabilities.minImageCount);
-    if ((0 < capabilities.maxImageCount) && (capabilities.maxImageCount < minImageCount))
-    {
+    if ((0 < capabilities.maxImageCount) && (capabilities.maxImageCount < minImageCount)) {
         minImageCount = capabilities.maxImageCount;
     }
     return minImageCount;
 }
 
 void VkRenderer::CreateImageViews() {
-    vk::ImageViewCreateInfo imageViewCreateInfo {
+    vk::ImageViewCreateInfo imageViewCreateInfo{
         .viewType = vk::ImageViewType::e2D,
         .format = swapChainSurfaceFormat_.format,
         .subresourceRange = {
@@ -263,7 +345,7 @@ void VkRenderer::CreateImageViews() {
         }
     };
 
-    for (auto &image : swapChainImages_) {
+    for (auto& image : swapChainImages_) {
         imageViewCreateInfo.image = image;
         swapChainImageViews_.emplace_back(device_, imageViewCreateInfo);
     }
@@ -273,25 +355,25 @@ void VkRenderer::CreateGraphicsPipeline() {
     std::vector<uint32_t> shaderCode = ReadFile("shaders/shader.spv");
 
     // Creating shader modules is deprecated in 1.4, just pass the create info directly to the pipeline
-    vk::ShaderModuleCreateInfo shaderModuleCreateInfo {
+    vk::ShaderModuleCreateInfo shaderModuleCreateInfo{
         .codeSize = shaderCode.size() * sizeof(uint32_t),
         .pCode = shaderCode.data()
     };
 
-    vk::PipelineShaderStageCreateInfo vertStageCreateInfo {
+    vk::PipelineShaderStageCreateInfo vertStageCreateInfo{
         .pNext = shaderModuleCreateInfo,
         .stage = vk::ShaderStageFlagBits::eVertex,
         .module = nullptr,
         .pName = "vertMain"
     };
 
-    vk::PipelineShaderStageCreateInfo fragStageCreateInfo {
+    vk::PipelineShaderStageCreateInfo fragStageCreateInfo{
         .pNext = shaderModuleCreateInfo,
         .stage = vk::ShaderStageFlagBits::eFragment,
         .module = nullptr,
         .pName = "fragMain"
     };
-    vk::PipelineShaderStageCreateInfo shaderStages[] = { vertStageCreateInfo, fragStageCreateInfo };
+    vk::PipelineShaderStageCreateInfo shaderStages[] = {vertStageCreateInfo, fragStageCreateInfo};
 
     // Specify which states are dynamic, i.e., will be skipped in the pipeline creation and must be specified at draw time. This allows for changing them without having to recreate the pipeline.
     std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
@@ -329,7 +411,7 @@ void VkRenderer::CreateGraphicsPipeline() {
     };
 
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-        .blendEnable    = vk::False,
+        .blendEnable = vk::False,
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
     };
 
@@ -340,7 +422,7 @@ void VkRenderer::CreateGraphicsPipeline() {
         .pAttachments = &colorBlendAttachment
     };
 
-    vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo {
+    vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo{
         .setLayoutCount = 0,
         .pushConstantRangeCount = 0
     };
@@ -348,30 +430,133 @@ void VkRenderer::CreateGraphicsPipeline() {
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
         {
-            .stageCount          = 2,
-            .pStages             = shaderStages,
-            .pVertexInputState   = &vertexInputStateCreateInfo,
+            .stageCount = 2,
+            .pStages = shaderStages,
+            .pVertexInputState = &vertexInputStateCreateInfo,
             .pInputAssemblyState = &inputAssemblyStateCreateInfo,
-            .pViewportState      = &viewportStateCreateInfo,
+            .pViewportState = &viewportStateCreateInfo,
             .pRasterizationState = &rasterizerCreateInfo,
-            .pMultisampleState   = &multisampling,
-            .pColorBlendState    = &colorBlendingCreateInfo,
-            .pDynamicState       = &dynamicStateCreateInfo,
-            .layout              = pipelineLayout_,
-            .renderPass          = nullptr
+            .pMultisampleState = &multisampling,
+            .pColorBlendState = &colorBlendingCreateInfo,
+            .pDynamicState = &dynamicStateCreateInfo,
+            .layout = pipelineLayout_,
+            .renderPass = nullptr
         },
-    {
-        .colorAttachmentCount = 1,
-        .pColorAttachmentFormats = &swapChainSurfaceFormat_.format
+        {
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &swapChainSurfaceFormat_.format
         }
     };
 
     graphicsPipeline_ = vk::raii::Pipeline(device_, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+}
 
+void VkRenderer::InitCommandBuffers() {
+    for (FrameData &frame : frames_) {
+        const vk::CommandPoolCreateInfo poolCreateInfo{
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = graphicsQueueIndex_
+        };
+        frame.commandPool = vk::raii::CommandPool(device_, poolCreateInfo);
+
+        const vk::CommandBufferAllocateInfo allocInfo {
+            .commandPool = frame.commandPool,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = kMaxFramesInFlight
+        };
+
+        frame.commandBuffer = std::move(vk::raii::CommandBuffers(device_, allocInfo).front());
+    }
+}
+
+void VkRenderer::CreateSyncObjects() {
+    vk::SemaphoreTypeCreateInfo semaphoreTypeCreateInfo{
+        .semaphoreType = vk::SemaphoreType::eTimeline,
+        .initialValue = kMaxFramesInFlight,
+    };
+    const vk::SemaphoreCreateInfo timelineSemaphoreCreateInfo{
+        .sType = vk::StructureType::eSemaphoreCreateInfo,
+        .pNext = &semaphoreTypeCreateInfo
+    };
+    timelineSemaphore_ = vk::raii::Semaphore(device_, timelineSemaphoreCreateInfo);
+
+    for (FrameData &frame : frames_) {
+        frame.imageAcquiredSemaphore = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+    }
+
+    for (size_t i = 0; i < swapChainImages_.size(); i++)
+    {
+        renderCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+    }
+}
+
+void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) const {
+
+    frames_.at(frameIndex).commandBuffer.begin({});
+
+    // Transition the image layout for rendering
+    TransitionImageLayout(
+        imageIndex,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput
+    );
+
+    // Set up the color attachment
+    constexpr vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+
+    vk::RenderingAttachmentInfo attachmentInfo = {
+        .imageView = swapChainImageViews_.at(imageIndex),
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = clearColor
+    };
+
+    // Set up the rendering info
+    const vk::RenderingInfo renderingInfo = {
+        .renderArea = {
+            .offset = {
+                .x = 0,
+                .y = 0
+            },
+            .extent = swapChainExtent_
+        },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachmentInfo
+    };
+
+    // Begin rendering
+    frames_.at(frameIndex).commandBuffer.beginRendering(renderingInfo);
+
+    frames_.at(frameIndex).commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
+    frames_.at(frameIndex).commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
+    frames_.at(frameIndex).commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
+    frames_.at(frameIndex).commandBuffer.draw(3, 1, 0, 0);
+
+    // End rendering
+    frames_.at(frameIndex).commandBuffer.endRendering();
+
+    // Transition the image layout for presentation
+    TransitionImageLayout(
+        imageIndex,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        vk::ImageLayout::ePresentSrcKHR,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        {},
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eBottomOfPipe
+    );
+
+    frames_.at(frameIndex).commandBuffer.end();
 }
 
 void VkRenderer::SetupDebugMessenger() {
-    if (!enableValidationLayers) return;
+    if (!kEnableValidationLayers) return;
     constexpr vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
     constexpr vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
     constexpr vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfo{
@@ -388,5 +573,40 @@ vk::Bool32 VkRenderer::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT se
     return vk::False;
 }
 
+void VkRenderer::TransitionImageLayout(
+    const uint32_t imageIndex,
+    const vk::ImageLayout oldLayout,
+    const vk::ImageLayout newLayout,
+    const vk::AccessFlags2 srcAccessMask,
+    const vk::AccessFlags2 dstAccessMask,
+    const vk::PipelineStageFlags2 srcStageMask,
+    const vk::PipelineStageFlags2 dstStageMask) const {
 
+    vk::ImageMemoryBarrier2 barrier = {
+        .srcStageMask        = srcStageMask,
+        .srcAccessMask       = srcAccessMask,
+        .dstStageMask        = dstStageMask,
+        .dstAccessMask       = dstAccessMask,
+        .oldLayout           = oldLayout,
+        .newLayout           = newLayout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image               = swapChainImages_[imageIndex],
+        .subresourceRange    = {
+            .aspectMask     = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel   = 0,
+            .levelCount     = 1,
+            .baseArrayLayer = 0,
+            .layerCount     = 1
+        }
+    };
+
+    const vk::DependencyInfo dependencyInfo = {
+        .dependencyFlags         = {},
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers    = &barrier
+    };
+
+    frames_.at(frameIndex_).commandBuffer.pipelineBarrier2(dependencyInfo);
+}
 }

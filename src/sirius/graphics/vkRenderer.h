@@ -9,10 +9,13 @@ const std::vector kValidationLayers = {
     "VK_LAYER_KHRONOS_validation",
 };
 
+constexpr uint32_t kMaxFramesInFlight{2};
+
+
 #ifdef NDEBUG
-constexpr bool enableValidationLayers = false;
+constexpr bool kEnableValidationLayers = false;
 #else
-constexpr bool enableValidationLayers = true;
+constexpr bool kEnableValidationLayers = true;
 #endif
 
 static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
@@ -39,6 +42,12 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     return buffer;
 }
 
+struct FrameData {
+    vk::raii::CommandPool commandPool{nullptr};
+    vk::raii::CommandBuffer commandBuffer{nullptr};
+    vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
+};
+
 
 class VkRenderer {
 public:
@@ -46,10 +55,10 @@ public:
     void Draw();
 
 private:
+    //////// Initialization ////////
     void CreateInstance();
     void CreateSurface();
     void PickPhysicalDevice();
-
     bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
     void CreateLogicalDevice();
     void CreateSwapChain();
@@ -59,10 +68,25 @@ private:
     uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
     void CreateImageViews();
     void CreateGraphicsPipeline();
+    void InitCommandBuffers();
+    void CreateSyncObjects();
+
+    /////////// Drawing ///////////
+    void RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) const;
 
 
     void SetupDebugMessenger();
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
+
+    void TransitionImageLayout(
+        uint32_t imageIndex,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        vk::AccessFlags2 srcAccessMask,
+        vk::AccessFlags2 dstAccessMask,
+        vk::PipelineStageFlags2 srcStageMask,
+        vk::PipelineStageFlags2 dstStageMask
+    ) const;
 
     std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName, vk::KHRMaintenance5ExtensionName};
     // Declaration order dictates cleanup order
@@ -72,15 +96,20 @@ private:
     vk::raii::PhysicalDevice physicalDevice_{nullptr};
     vk::raii::DebugUtilsMessengerEXT debugMessenger_{nullptr};
     vk::raii::Device device_{nullptr};
-    vk::raii::Queue queue_{nullptr};
+    vk::raii::Queue graphicsQueue_{nullptr};
+    uint32_t graphicsQueueIndex_{0};
     vk::raii::SwapchainKHR swapChain_{nullptr};
     vk::Extent2D swapChainExtent_;
     std::vector<vk::Image> swapChainImages_;
     vk::SurfaceFormatKHR swapChainSurfaceFormat_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
-    vk::raii::Pipeline graphicsPipeline_ = nullptr;
+    vk::raii::Pipeline graphicsPipeline_{nullptr};
+    vk::raii::Semaphore timelineSemaphore_{nullptr};
+    std::vector<vk::raii::Semaphore> renderCompleteSemaphores_;
+    std::array<FrameData, kMaxFramesInFlight> frames_;
 
-
+    uint64_t frameIndex_ = 0;
+    uint64_t nextSignalValue_ = kMaxFramesInFlight + 1;
 };
 }

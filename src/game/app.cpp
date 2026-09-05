@@ -55,5 +55,6 @@ Fsm::FsmReturn App::RunGame() {
         SetState(kShutdownSystem);
         return kContinue;
     }
+    sirius::Renderer::Draw();
     return kContinue;
 }
