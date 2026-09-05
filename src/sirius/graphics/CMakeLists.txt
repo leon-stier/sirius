@@ -19,6 +19,6 @@ if (ENABLE_CPP20_MODULE)
 endif ()
 
 
-target_include_directories(graphics PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+target_include_directories(graphics PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
 
-)
+add_dependencies(graphics shaders)

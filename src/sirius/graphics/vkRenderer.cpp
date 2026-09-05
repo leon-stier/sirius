@@ -36,7 +36,7 @@ void VkRenderer::CreateInstance() {
     std::vector requiredExtensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-        VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
     if (enableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
 
@@ -97,13 +97,9 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
         return static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
     });
 
-    std::vector requiredDeviceExtensions{
-        vk::KHRSwapchainExtensionName
-    };
-
     // 3. Extension check
     auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-    bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtensions, [&](std::string_view required) {
+    bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtensions_, [&](std::string_view required) {
         return std::ranges::contains(availableExtensions, required, [](const auto& ext) {
             return std::string_view(ext.extensionName);
         });
@@ -114,13 +110,15 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
         vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+        vk::PhysicalDeviceMaintenance5FeaturesKHR
     >();
 
     bool supportsRequiredFeatures =
         features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
         features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-        features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+        features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+        features.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5;
     return supportsVulkan13 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
 
 }
@@ -145,11 +143,12 @@ void VkRenderer::CreateLogicalDevice() {
 
     const uint32_t graphicsIndex = static_cast<uint32_t>(std::get<0>(*it));
 
-    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, vk::PhysicalDeviceMaintenance5FeaturesKHR> featureChain = {
         {},                                    // vk::PhysicalDeviceFeatures2
         {.shaderDrawParameters = true},        // vk::PhysicalDeviceVulkan11Features
         {.dynamicRendering = true},            // vk::PhysicalDeviceVulkan13Features
-        {.extendedDynamicState = true}         // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+        {.extendedDynamicState = true},         // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+        {.maintenance5 = true}
     };
 
     float queuePriority = 0.5f;
@@ -271,6 +270,103 @@ void VkRenderer::CreateImageViews() {
 }
 
 void VkRenderer::CreateGraphicsPipeline() {
+    std::vector<uint32_t> shaderCode = ReadFile("shaders/shader.spv");
+
+    // Creating shader modules is deprecated in 1.4, just pass the create info directly to the pipeline
+    vk::ShaderModuleCreateInfo shaderModuleCreateInfo {
+        .codeSize = shaderCode.size() * sizeof(uint32_t),
+        .pCode = shaderCode.data()
+    };
+
+    vk::PipelineShaderStageCreateInfo vertStageCreateInfo {
+        .pNext = shaderModuleCreateInfo,
+        .stage = vk::ShaderStageFlagBits::eVertex,
+        .module = nullptr,
+        .pName = "vertMain"
+    };
+
+    vk::PipelineShaderStageCreateInfo fragStageCreateInfo {
+        .pNext = shaderModuleCreateInfo,
+        .stage = vk::ShaderStageFlagBits::eFragment,
+        .module = nullptr,
+        .pName = "fragMain"
+    };
+    vk::PipelineShaderStageCreateInfo shaderStages[] = { vertStageCreateInfo, fragStageCreateInfo };
+
+    // Specify which states are dynamic, i.e., will be skipped in the pipeline creation and must be specified at draw time. This allows for changing them without having to recreate the pipeline.
+    std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynamicStateCreateInfo{
+        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .pDynamicStates = dynamicStates.data()
+    };
+
+    // No vertex input for now as it's hardcoded in the shader
+    vk::PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo;
+
+    vk::PipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo{
+        .topology = vk::PrimitiveTopology::eTriangleList,
+    };
+
+    vk::PipelineViewportStateCreateInfo viewportStateCreateInfo{
+        .viewportCount = 1,
+        .scissorCount = 1
+    };
+
+
+    vk::PipelineRasterizationStateCreateInfo rasterizerCreateInfo{
+        .depthClampEnable = vk::False,
+        .rasterizerDiscardEnable = vk::False,
+        .polygonMode = vk::PolygonMode::eFill,
+        .cullMode = vk::CullModeFlagBits::eBack,
+        .frontFace = vk::FrontFace::eClockwise,
+        .depthBiasEnable = vk::False,
+        .lineWidth = 1.0f
+    };
+
+    vk::PipelineMultisampleStateCreateInfo multisampling{
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+        .sampleShadingEnable = vk::False
+    };
+
+    vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable    = vk::False,
+        .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+    };
+
+    vk::PipelineColorBlendStateCreateInfo colorBlendingCreateInfo{
+        .logicOpEnable = vk::False,
+        .logicOp = vk::LogicOp::eCopy,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment
+    };
+
+    vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo {
+        .setLayoutCount = 0,
+        .pushConstantRangeCount = 0
+    };
+    pipelineLayout_ = vk::raii::PipelineLayout(device_, pipelineLayoutCreateInfo);
+
+    vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
+        {
+            .stageCount          = 2,
+            .pStages             = shaderStages,
+            .pVertexInputState   = &vertexInputStateCreateInfo,
+            .pInputAssemblyState = &inputAssemblyStateCreateInfo,
+            .pViewportState      = &viewportStateCreateInfo,
+            .pRasterizationState = &rasterizerCreateInfo,
+            .pMultisampleState   = &multisampling,
+            .pColorBlendState    = &colorBlendingCreateInfo,
+            .pDynamicState       = &dynamicStateCreateInfo,
+            .layout              = pipelineLayout_,
+            .renderPass          = nullptr
+        },
+    {
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &swapChainSurfaceFormat_.format
+        }
+    };
+
+    graphicsPipeline_ = vk::raii::Pipeline(device_, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 
 }
 

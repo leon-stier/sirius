@@ -15,6 +15,30 @@ constexpr bool enableValidationLayers = false;
 constexpr bool enableValidationLayers = true;
 #endif
 
+static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
+    if (!std::filesystem::exists(filePath)) {
+        throw std::runtime_error("SPIR-V file does not exist: " + filePath.string());
+    }
+
+    const auto fileSize = std::filesystem::file_size(filePath);
+
+    if (fileSize % sizeof(uint32_t) != 0) {
+        throw std::runtime_error("Corrupt SPIR-V file (size is not a multiple of 4 bytes): " + filePath.string());
+    }
+
+    std::ifstream file(filePath, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open SPIR-V file: " + filePath.string());
+    }
+
+    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(fileSize));
+
+    return buffer;
+}
+
 
 class VkRenderer {
 public:
@@ -26,7 +50,7 @@ private:
     void CreateSurface();
     void PickPhysicalDevice();
 
-    static bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
+    bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
     void CreateLogicalDevice();
     void CreateSwapChain();
     vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
@@ -40,7 +64,7 @@ private:
     void SetupDebugMessenger();
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
 
-    std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName};
+    std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName, vk::KHRMaintenance5ExtensionName};
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
@@ -54,6 +78,9 @@ private:
     std::vector<vk::Image> swapChainImages_;
     vk::SurfaceFormatKHR swapChainSurfaceFormat_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
+    vk::raii::PipelineLayout pipelineLayout_{nullptr};
+    vk::raii::Pipeline graphicsPipeline_ = nullptr;
+
 
 };
 }
