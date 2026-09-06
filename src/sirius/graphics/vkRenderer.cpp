@@ -1,9 +1,70 @@
 #include "vkRenderer.h"
 
-#include "vulkan/vulkan_core.h"
 
 #include "window/wndProc.h"
-#include <vulkan/vulkan_win32.h>
+
+namespace {
+template <typename T>
+bool SupportsAllRequiredFeatures(const T& required, const T& queried) {
+    constexpr size_t headerSize = sizeof(vk::StructureType) + sizeof(void*);
+
+    auto reqFlags = std::span<const vk::Bool32>(
+        reinterpret_cast<const vk::Bool32*>(reinterpret_cast<const char*>(&required) + headerSize),
+        (sizeof(T) - headerSize) / sizeof(vk::Bool32)
+    );
+
+    auto queriedFlags = std::span<const vk::Bool32>(
+        reinterpret_cast<const vk::Bool32*>(reinterpret_cast<const char*>(&queried) + headerSize),
+        (sizeof(T) - headerSize) / sizeof(vk::Bool32)
+    );
+
+    for (size_t i = 0; i < reqFlags.size(); ++i) {
+        if (reqFlags[i] == vk::True && queriedFlags[i] != vk::True) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 3. Helper to chain pNext pointers in a std::tuple
+template <typename Tuple, std::size_t... Is>
+void ChainPNext(Tuple& tuple, std::index_sequence<Is...>) {
+    ((std::get<Is>(tuple).pNext = &std::get<Is + 1>(tuple)), ...);
+}
+
+template <typename Tuple>
+void SetupFeatureChain(Tuple& tuple) {
+    constexpr auto size = std::tuple_size_v<Tuple>;
+    if constexpr (size > 1) {
+        ChainPNext(tuple, std::make_index_sequence<size - 1>{});
+    }
+}
+
+// 4. Automated dynamic features check
+template <typename Tuple, std::size_t... Is>
+auto QueryFeaturesChain(const vk::raii::PhysicalDevice& device, std::index_sequence<Is...>) {
+    // Unpacks tuple element types: device.getFeatures2<T0, T1, T2...>()
+    return device.getFeatures2<
+        vk::PhysicalDeviceFeatures2,
+        std::tuple_element_t<Is, Tuple>...
+    >();
+}
+
+template <typename Tuple>
+bool CheckTupleFeatures(const vk::raii::PhysicalDevice& device, const Tuple& requiredTuple) {
+    // 1. Query the device using the types inside requiredTuple
+    auto chain = QueryFeaturesChain<Tuple>(
+        device,
+        std::make_index_sequence<std::tuple_size_v<Tuple>>{}
+    );
+
+    // 2. Validate every required feature struct against what getFeatures2 returned
+    return std::apply([&]<typename... T0>(const T0&... reqStructs) {
+        // chain.get<T>() retrieves the queried structure for type T from the returned chain
+        return (SupportsAllRequiredFeatures(reqStructs, chain.template get<std::decay_t<T0>>()) && ...);
+    }, requiredTuple);
+}
+}
 
 namespace sirius {
 void VkRenderer::Init() {
@@ -20,7 +81,7 @@ void VkRenderer::Init() {
 }
 
 void VkRenderer::Draw() {
-    const uint32_t frameIndex = frameIndex_++ % kMaxFramesInFlight;
+    const uint32_t currentFrameIndex = frameIndex_++ % kMaxFramesInFlight;
     const uint64_t signalValue = nextSignalValue_++;
     const uint64_t waitValue = signalValue - kMaxFramesInFlight;
 
@@ -38,16 +99,16 @@ void VkRenderer::Draw() {
         throw std::runtime_error("Failed or timed out waiting for timeline semaphore!");
     }
 
-    auto [acquireResult, imageIndex] = swapChain_.acquireNextImage(std::numeric_limits<uint64_t>::max(), *frames_[frameIndex].imageAcquiredSemaphore, nullptr);
+    auto [acquireResult, imageIndex] = swapChain_.acquireNextImage(std::numeric_limits<uint64_t>::max(), *frames_[currentFrameIndex].imageAcquiredSemaphore, nullptr);
     // Result can also indicate out of date images
     if (acquireResult != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to acquire next image!");
     }
 
-    RecordCommandBuffer(imageIndex, frameIndex);
+    RecordCommandBuffer(imageIndex, currentFrameIndex);
 
     const vk::SemaphoreSubmitInfo imageAcquireWaitInfo {
-        .semaphore = *frames_[frameIndex].imageAcquiredSemaphore,
+        .semaphore = *frames_[currentFrameIndex].imageAcquiredSemaphore,
         .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput
     };
 
@@ -64,7 +125,7 @@ void VkRenderer::Draw() {
     }};
 
     const vk::CommandBufferSubmitInfo cmdSubmitInfo{
-        .commandBuffer = *frames_.at(frameIndex).commandBuffer
+        .commandBuffer = *frames_.at(currentFrameIndex).commandBuffer
     };
 
     // 2. Modern SubmitInfo2
@@ -115,9 +176,9 @@ void VkRenderer::CreateInstance() {
     };
 
     std::vector requiredExtensions = {
-        VK_KHR_SURFACE_EXTENSION_NAME,
-        VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+        vk::KHRSurfaceExtensionName,
+        vk::KHRWin32SurfaceExtensionName,
+        vk::EXTDebugUtilsExtensionName
     };
     if (kEnableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
 
@@ -164,43 +225,31 @@ void VkRenderer::PickPhysicalDevice() {
     if (const auto devIter = std::ranges::find_if(physicalDevices, [this](const auto& dev) { return IsDeviceSuitable(dev); }); devIter != physicalDevices.end()) {
         physicalDevice_ = *devIter;
     } else {
-        throw std::runtime_error("failed to find a suitable GPU!");
+        throw std::runtime_error("Failed to find a suitable GPU!");
     }
 }
 
 bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
+    using Req = PhysicalDeviceRequirements;
     // 1. API version check
-    bool supportsVulkan13 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+    if (physicalDevice.getProperties().apiVersion < Req::minApiVersion) return false;
+
 
     // 2. Queue family check
     auto queueFamilies = physicalDevice.getQueueFamilyProperties();
-    bool supportsGraphics = std::ranges::any_of(queueFamilies, [](const auto& qfp) {
-        return static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
-    });
+    if (!std::ranges::any_of(queueFamilies, [](const auto& qfp) {
+        return static_cast<bool>(qfp.queueFlags & Req::queueFlagBits);
+    })) return false;   // Return early if queues are not supported
 
     // 3. Extension check
     auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-    bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtensions_, [&](std::string_view required) {
+    if (!std::ranges::all_of(Req::extensions, [&](const std::string_view required) {
         return std::ranges::contains(availableExtensions, required, [](const auto& ext) {
             return std::string_view(ext.extensionName);
         });
-    });
+    })) return false;   // Return early if extensions are not supported
 
-    // 4. Feature checks (Note: extendedDynamicState is Vulkan 1.3 core)
-    auto features = physicalDevice.getFeatures2<
-        vk::PhysicalDeviceFeatures2,
-        vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
-        vk::PhysicalDeviceMaintenance5FeaturesKHR
-    >();
-
-    bool supportsRequiredFeatures =
-            features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
-            features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-            features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
-            features.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5;
-    return supportsVulkan13 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+    return CheckTupleFeatures(physicalDevice, Req::requiredFeatures);
 }
 
 void VkRenderer::CreateLogicalDevice() {
@@ -208,7 +257,7 @@ void VkRenderer::CreateLogicalDevice() {
 
     auto enumeratedProperties = queueFamilyProperties | std::views::enumerate;
 
-    auto it = std::ranges::find_if(enumeratedProperties, [this](const auto& tuple) {
+    const auto it = std::ranges::find_if(enumeratedProperties, [this](const auto& tuple) {
         auto [index, qfp] = tuple;
 
         const bool supportsGraphics = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
@@ -223,15 +272,6 @@ void VkRenderer::CreateLogicalDevice() {
 
     graphicsQueueIndex_ = static_cast<uint32_t>(std::get<0>(*it));
 
-    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, vk::PhysicalDeviceMaintenance5FeaturesKHR> featureChain = {
-        {}, // vk::PhysicalDeviceFeatures2
-        {.shaderDrawParameters = true}, // vk::PhysicalDeviceVulkan11Features
-        {.timelineSemaphore = true},
-        {.dynamicRendering = true}, // vk::PhysicalDeviceVulkan13Features
-        {.extendedDynamicState = true}, // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
-        {.maintenance5 = true}
-    };
-
     float queuePriority = 0.5f;
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
         .queueFamilyIndex = graphicsQueueIndex_,
@@ -239,10 +279,15 @@ void VkRenderer::CreateLogicalDevice() {
         .pQueuePriorities = &queuePriority
     };
 
-    vk::PhysicalDeviceFeatures deviceFeatures{}; // Filled as features are needed
+    auto featuresChain = PhysicalDeviceRequirements::requiredFeatures;
+    SetupFeatureChain(featuresChain);
+
+    vk::PhysicalDeviceFeatures2 deviceFeatures;
+    deviceFeatures.pNext = &std::get<0>(featuresChain);
+
 
     vk::DeviceCreateInfo deviceCreateInfo{
-        .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+        .pNext = &deviceFeatures,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &deviceQueueCreateInfo,
         .enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtensions_.size()),
@@ -490,9 +535,9 @@ void VkRenderer::CreateSyncObjects() {
     }
 }
 
-void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) const {
-
-    frames_.at(frameIndex).commandBuffer.begin({});
+void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const {
+    auto& buffer = frames_.at(currentFrameIndex).commandBuffer;
+    buffer.begin({});
 
     // Transition the image layout for rendering
     TransitionImageLayout(
@@ -502,7 +547,8 @@ void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) c
         {},
         vk::AccessFlagBits2::eColorAttachmentWrite,
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        currentFrameIndex
     );
 
     // Set up the color attachment
@@ -531,15 +577,15 @@ void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) c
     };
 
     // Begin rendering
-    frames_.at(frameIndex).commandBuffer.beginRendering(renderingInfo);
+    buffer.beginRendering(renderingInfo);
 
-    frames_.at(frameIndex).commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
-    frames_.at(frameIndex).commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
-    frames_.at(frameIndex).commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
-    frames_.at(frameIndex).commandBuffer.draw(3, 1, 0, 0);
+    buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
+    buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
+    buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
+    buffer.draw(3, 1, 0, 0);
 
     // End rendering
-    frames_.at(frameIndex).commandBuffer.endRendering();
+    buffer.endRendering();
 
     // Transition the image layout for presentation
     TransitionImageLayout(
@@ -549,10 +595,11 @@ void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) c
         vk::AccessFlagBits2::eColorAttachmentWrite,
         {},
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eBottomOfPipe
+        vk::PipelineStageFlagBits2::eBottomOfPipe,
+        currentFrameIndex
     );
 
-    frames_.at(frameIndex).commandBuffer.end();
+    buffer.end();
 }
 
 void VkRenderer::SetupDebugMessenger() {
@@ -580,7 +627,8 @@ void VkRenderer::TransitionImageLayout(
     const vk::AccessFlags2 srcAccessMask,
     const vk::AccessFlags2 dstAccessMask,
     const vk::PipelineStageFlags2 srcStageMask,
-    const vk::PipelineStageFlags2 dstStageMask) const {
+    const vk::PipelineStageFlags2 dstStageMask,
+    const uint32_t currentFrameIndex) const {
 
     vk::ImageMemoryBarrier2 barrier = {
         .srcStageMask        = srcStageMask,
@@ -589,8 +637,8 @@ void VkRenderer::TransitionImageLayout(
         .dstAccessMask       = dstAccessMask,
         .oldLayout           = oldLayout,
         .newLayout           = newLayout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
         .image               = swapChainImages_[imageIndex],
         .subresourceRange    = {
             .aspectMask     = vk::ImageAspectFlagBits::eColor,
@@ -607,6 +655,7 @@ void VkRenderer::TransitionImageLayout(
         .pImageMemoryBarriers    = &barrier
     };
 
-    frames_.at(frameIndex_).commandBuffer.pipelineBarrier2(dependencyInfo);
+    frames_.at(currentFrameIndex).commandBuffer.pipelineBarrier2(dependencyInfo);
 }
 }
+

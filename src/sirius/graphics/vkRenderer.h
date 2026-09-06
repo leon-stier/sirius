@@ -18,6 +18,8 @@ constexpr bool kEnableValidationLayers = false;
 constexpr bool kEnableValidationLayers = true;
 #endif
 
+
+
 static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     if (!std::filesystem::exists(filePath)) {
         throw std::runtime_error("SPIR-V file does not exist: " + filePath.string());
@@ -48,6 +50,28 @@ struct FrameData {
     vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
 };
 
+struct PhysicalDeviceRequirements {
+    static constexpr uint32_t minApiVersion = vk::ApiVersion13;
+
+    static inline const std::vector<const char*> extensions = {
+        vk::KHRSwapchainExtensionName,
+        vk::EXTExtendedDynamicStateExtensionName,
+        vk::KHRMaintenance5ExtensionName
+    };
+
+    static constexpr auto queueFlagBits{
+        vk::QueueFlagBits::eGraphics
+    };
+
+    static constexpr auto requiredFeatures = std::make_tuple(
+        vk::PhysicalDeviceVulkan11Features{ .shaderDrawParameters = vk::True },
+        vk::PhysicalDeviceVulkan12Features{ .timelineSemaphore = vk::True},
+        vk::PhysicalDeviceVulkan13Features{ .synchronization2 = vk::True, .dynamicRendering = vk::True },
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{ .extendedDynamicState = vk::True },
+        vk::PhysicalDeviceMaintenance5FeaturesKHR{ .maintenance5 = vk::True }
+    );
+};
+
 
 class VkRenderer {
 public:
@@ -72,7 +96,7 @@ private:
     void CreateSyncObjects();
 
     /////////// Drawing ///////////
-    void RecordCommandBuffer(uint32_t imageIndex, uint32_t frameIndex) const;
+    void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
 
 
     void SetupDebugMessenger();
@@ -85,7 +109,8 @@ private:
         vk::AccessFlags2 srcAccessMask,
         vk::AccessFlags2 dstAccessMask,
         vk::PipelineStageFlags2 srcStageMask,
-        vk::PipelineStageFlags2 dstStageMask
+        vk::PipelineStageFlags2 dstStageMask,
+        uint32_t currentFrameIndex
     ) const;
 
     std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName, vk::KHRMaintenance5ExtensionName};
