@@ -86,6 +86,7 @@ private:
     bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
     void CreateLogicalDevice();
     void CreateSwapChain();
+    void DestroySwapChain();
     vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
     vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
     vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
@@ -134,7 +135,8 @@ private:
     std::vector<vk::raii::Semaphore> renderCompleteSemaphores_;
     std::array<FrameData, kMaxFramesInFlight> frames_;
 
-    uint64_t frameIndex_ = 0;
-    uint64_t nextSignalValue_ = kMaxFramesInFlight + 1;
+    uint64_t frameIndex_{0};
+    uint64_t nextSignalValue_{kMaxFramesInFlight + 1};
+    bool requireSwapChainRecreate_{false};
 };
 }

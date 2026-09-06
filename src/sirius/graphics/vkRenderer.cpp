@@ -81,6 +81,16 @@ void VkRenderer::Init() {
 }
 
 void VkRenderer::Draw() {
+    if (requireSwapChainRecreate_)
+    {
+        device_.waitIdle();
+        DestroySwapChain();
+        CreateSwapChain();
+        CreateImageViews();
+        requireSwapChainRecreate_ = false;
+    }
+
+
     const uint32_t currentFrameIndex = frameIndex_++ % kMaxFramesInFlight;
     const uint64_t signalValue = nextSignalValue_++;
     const uint64_t waitValue = signalValue - kMaxFramesInFlight;
@@ -101,8 +111,15 @@ void VkRenderer::Draw() {
 
     auto [acquireResult, imageIndex] = swapChain_.acquireNextImage(std::numeric_limits<uint64_t>::max(), *frames_[currentFrameIndex].imageAcquiredSemaphore, nullptr);
     // Result can also indicate out of date images
-    if (acquireResult != vk::Result::eSuccess) {
-        throw std::runtime_error("Failed to acquire next image!");
+    if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
+        requireSwapChainRecreate_ = true;
+        return;
+    }
+    if (acquireResult == vk::Result::eSuboptimalKHR) {
+        requireSwapChainRecreate_ = true;
+    }
+    if (acquireResult != vk::Result::eSuccess && acquireResult != vk::Result::eSuboptimalKHR) {
+        throw vk::SystemError(acquireResult, "Failed to acquire next swapchain image");
     }
 
     RecordCommandBuffer(imageIndex, currentFrameIndex);
@@ -326,6 +343,11 @@ void VkRenderer::CreateSwapChain() {
 
     swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
     swapChainImages_ = swapChain_.getImages();
+}
+
+void VkRenderer::DestroySwapChain() {
+    swapChainImageViews_.clear();
+    swapChain_ = nullptr;
 }
 
 vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const& availableFormats) {
