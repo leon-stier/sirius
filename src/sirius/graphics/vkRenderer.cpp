@@ -81,15 +81,28 @@ void VkRenderer::Init() {
 }
 
 void VkRenderer::Draw() {
-    if (requireSwapChainRecreate_)
-    {
-        device_.waitIdle();
-        DestroySwapChain();
-        CreateSwapChain();
-        CreateImageViews();
-        requireSwapChainRecreate_ = false;
+    if (pauseRendering) {
+        requireSwapChainRecreate_ = true;
+        WaitMessage();
+        return;
     }
+    try {
+        DoDraw();
+    } catch (vk::SystemError& err) {
+        const auto result = static_cast<vk::Result>(err.code().value());
 
+        std::cerr << "Vulkan SystemError\n"
+                  << "  Message: " << err.what() << "\n"
+                  << "  Result Code: " << vk::to_string(result) << " (" << err.code().value() << ")\n";
+    }
+    catch (const std::exception& err) {
+        // Fallback for non-Vulkan standard exceptions
+        std::cerr << "Non-Vulkan Exception while Rendering: " << err.what() << "\n";
+    }
+}
+
+void VkRenderer::DoDraw() {
+    if (requireSwapChainRecreate_) RecreateSwapChain();
 
     const uint32_t currentFrameIndex = frameIndex_++ % kMaxFramesInFlight;
     const uint64_t signalValue = nextSignalValue_++;
@@ -172,9 +185,11 @@ void VkRenderer::Draw() {
         case vk::Result::eSuccess:
             break;
         case vk::Result::eSuboptimalKHR:
-            std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+        case vk::Result::eErrorOutOfDateKHR:
+            requireSwapChainRecreate_ = true;
             break;
         default:
+            throw vk::SystemError(presentResult, "An unexpected error occurred during presentation");
             break;        // an unexpected result is returned!
     }
 }
@@ -345,9 +360,14 @@ void VkRenderer::CreateSwapChain() {
     swapChainImages_ = swapChain_.getImages();
 }
 
-void VkRenderer::DestroySwapChain() {
+void VkRenderer::RecreateSwapChain() {
+    device_.waitIdle();
     swapChainImageViews_.clear();
     swapChain_ = nullptr;
+    CreateSwapChain();
+    CreateImageViews();
+    requireSwapChainRecreate_ = false;
+    std::cout << "Recreated SwapChain" << std::endl;
 }
 
 vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const& availableFormats) {
@@ -637,7 +657,7 @@ void VkRenderer::SetupDebugMessenger() {
 }
 
 vk::Bool32 VkRenderer::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-    std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+    std::cerr << "Validation Error of type " << to_string(type) << ". msg: " << pCallbackData->pMessage << std::endl;
 
     return vk::False;
 }

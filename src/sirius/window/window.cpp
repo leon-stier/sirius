@@ -79,6 +79,11 @@ LRESULT SrsWindow::HandleMessages(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_SIZE: {
             windowWidth = LOWORD(lParam);
             windowHeight = HIWORD(lParam);
+            if (wParam == SIZE_MINIMIZED || windowHeight <= 0 || windowWidth <= 0) {
+                pauseRendering = true;
+            } else {
+                pauseRendering = false;
+            }
             break;
         }
         default: {

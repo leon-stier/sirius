@@ -19,4 +19,5 @@ inline unsigned winClass;
 inline std::string windowTitle{"Sirius"};
 inline uint32_t windowWidth = 800;
 inline uint32_t windowHeight = 600;
+inline bool pauseRendering = false;
 inline bool closing = false;

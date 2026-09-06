@@ -78,6 +78,10 @@ public:
     void Init();
     void Draw();
 
+    ~VkRenderer() {
+        device_.waitIdle();
+    }
+
 private:
     //////// Initialization ////////
     void CreateInstance();
@@ -86,7 +90,7 @@ private:
     bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
     void CreateLogicalDevice();
     void CreateSwapChain();
-    void DestroySwapChain();
+    void RecreateSwapChain();
     vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
     vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
     vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
@@ -98,6 +102,7 @@ private:
 
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
+    void DoDraw();
 
 
     void SetupDebugMessenger();
@@ -118,22 +123,27 @@ private:
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
-    vk::raii::SurfaceKHR surface_{nullptr};
-    vk::raii::PhysicalDevice physicalDevice_{nullptr};
     vk::raii::DebugUtilsMessengerEXT debugMessenger_{nullptr};
+    vk::raii::SurfaceKHR surface_{nullptr};
+
+    vk::raii::PhysicalDevice physicalDevice_{nullptr};
     vk::raii::Device device_{nullptr};
     vk::raii::Queue graphicsQueue_{nullptr};
     uint32_t graphicsQueueIndex_{0};
+
     vk::raii::SwapchainKHR swapChain_{nullptr};
-    vk::Extent2D swapChainExtent_;
     std::vector<vk::Image> swapChainImages_;
     vk::SurfaceFormatKHR swapChainSurfaceFormat_;
+    vk::Extent2D swapChainExtent_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
+
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
+
+    std::array<FrameData, kMaxFramesInFlight> frames_;
+
     vk::raii::Semaphore timelineSemaphore_{nullptr};
     std::vector<vk::raii::Semaphore> renderCompleteSemaphores_;
-    std::array<FrameData, kMaxFramesInFlight> frames_;
 
     uint64_t frameIndex_{0};
     uint64_t nextSignalValue_{kMaxFramesInFlight + 1};
