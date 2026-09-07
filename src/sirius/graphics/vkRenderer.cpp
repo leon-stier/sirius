@@ -1,6 +1,5 @@
 #include "vkRenderer.h"
 
-
 #include "window/wndProc.h"
 
 namespace {
@@ -200,7 +199,7 @@ void VkRenderer::CreateInstance() {
         .applicationVersion = vk::makeVersion(0, 1, 0),
         .pEngineName = "Sirius",
         .engineVersion = vk::makeVersion(1, 0, 0),
-        .apiVersion = vk::ApiVersion14
+        .apiVersion = PhysicalDeviceRequirements::minApiVersion
     };
 
     vk::InstanceCreateInfo instanceCreateInfo{
@@ -322,8 +321,8 @@ void VkRenderer::CreateLogicalDevice() {
         .pNext = &deviceFeatures,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &deviceQueueCreateInfo,
-        .enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtensions_.size()),
-        .ppEnabledExtensionNames = requiredDeviceExtensions_.data()
+        .enabledExtensionCount = static_cast<uint32_t>(PhysicalDeviceRequirements::extensions.size()),
+        .ppEnabledExtensionNames = PhysicalDeviceRequirements::extensions.data()
     };
 
     device_ = vk::raii::Device(physicalDevice_, deviceCreateInfo);
@@ -468,9 +467,14 @@ void VkRenderer::CreateGraphicsPipeline() {
         .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data()
     };
-
-    // No vertex input for now as it's hardcoded in the shader
-    vk::PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo;
+    auto bindingDescription = Vertex::GetBindingDescription();
+    auto attributeDescriptions = Vertex::GetAttributeDescriptions();
+    vk::PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo {
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+        .pVertexAttributeDescriptions = attributeDescriptions.data()
+    };
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo{
         .topology = vk::PrimitiveTopology::eTriangleList,
@@ -539,7 +543,7 @@ void VkRenderer::CreateGraphicsPipeline() {
 }
 
 void VkRenderer::InitCommandBuffers() {
-    for (FrameData &frame : frames_) {
+    for (FrameContext &frame : frames_) {
         const vk::CommandPoolCreateInfo poolCreateInfo{
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             .queueFamilyIndex = graphicsQueueIndex_
@@ -549,7 +553,7 @@ void VkRenderer::InitCommandBuffers() {
         const vk::CommandBufferAllocateInfo allocInfo {
             .commandPool = frame.commandPool,
             .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = kMaxFramesInFlight
+            .commandBufferCount = 1
         };
 
         frame.commandBuffer = std::move(vk::raii::CommandBuffers(device_, allocInfo).front());
@@ -567,7 +571,7 @@ void VkRenderer::CreateSyncObjects() {
     };
     timelineSemaphore_ = vk::raii::Semaphore(device_, timelineSemaphoreCreateInfo);
 
-    for (FrameData &frame : frames_) {
+    for (FrameContext &frame : frames_) {
         frame.imageAcquiredSemaphore = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
     }
 
@@ -575,6 +579,27 @@ void VkRenderer::CreateSyncObjects() {
     {
         renderCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
     }
+}
+
+void VkRenderer::CreateVertexBuffer() {
+    const vk::BufferCreateInfo bufferInfo{
+        .size = sizeof(kVertices[0]) * kVertices.size(),
+        .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+        .sharingMode = vk::SharingMode::eExclusive
+    };
+    vertexBuffer_ = vk::raii::Buffer(device_, bufferInfo);
+
+    vk::MemoryRequirements memRequirements = vertexBuffer_.getMemoryRequirements();
+    vk::MemoryAllocateInfo memoryAllocateInfo{
+        .allocationSize  = memRequirements.size,
+        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+    vertexBufferMemory_ = vk::raii::DeviceMemory(device_, memoryAllocateInfo);
+
+    vertexBuffer_.bindMemory(*vertexBufferMemory, 0);
+
+    void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
+    memcpy(data, kVertices.data(), bufferInfo.size);
+    vertexBufferMemory.unmapMemory();
 }
 
 void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const {

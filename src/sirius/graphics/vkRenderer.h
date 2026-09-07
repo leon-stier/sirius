@@ -1,7 +1,9 @@
 #pragma once
+#include <glm/glm.hpp>
 
 import vulkan;
-#include "vulkan/vk_platform.h"
+#include <vulkan/vk_platform.h>
+
 
 namespace sirius {
 
@@ -44,14 +46,53 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     return buffer;
 }
 
-struct FrameData {
+struct Vertex
+{
+    glm::vec2 pos;
+    glm::vec3 color;
+
+    static vk::VertexInputBindingDescription GetBindingDescription()
+    {
+        return {
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex
+        };
+    }
+
+    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescriptions()
+    {
+        return {{
+            {
+                .location = 0,
+                .binding = 0,
+                .format = vk::Format::eR32G32Sfloat,
+                .offset = offsetof(Vertex, pos)
+            },
+        {
+            .location = 1,
+            .binding = 0,
+            .format = vk::Format::eR32G32B32Sfloat,
+            .offset = offsetof(Vertex, color)
+            }
+        }};
+    }
+};
+
+const std::vector<Vertex> kVertices = {
+    {.pos = {0.0f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
+    {.pos = {0.5f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+    {.pos = {-0.5f, 0.5f}, .color = {0.0f, 0.0f, 1.0f}}
+};
+
+struct FrameContext {
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
     vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
 };
 
 struct PhysicalDeviceRequirements {
-    static constexpr uint32_t minApiVersion = vk::ApiVersion13;
+    static constexpr uint32_t minApiVersion = vk::ApiVersion14;
 
     static inline const std::vector<const char*> extensions = {
         vk::KHRSwapchainExtensionName,
@@ -99,6 +140,8 @@ private:
     void CreateGraphicsPipeline();
     void InitCommandBuffers();
     void CreateSyncObjects();
+    void CreateVertexBuffer();
+
 
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
@@ -119,7 +162,6 @@ private:
         uint32_t currentFrameIndex
     ) const;
 
-    std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName, vk::KHRMaintenance5ExtensionName};
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
@@ -139,8 +181,9 @@ private:
 
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
-
-    std::array<FrameData, kMaxFramesInFlight> frames_;
+    vk::raii::Buffer vertexBuffer_ = nullptr;
+    vk::raii::DeviceMemory vertexBufferMemory_ = nullptr;
+    std::array<FrameContext, kMaxFramesInFlight> frames_;
 
     vk::raii::Semaphore timelineSemaphore_{nullptr};
     std::vector<vk::raii::Semaphore> renderCompleteSemaphores_;
