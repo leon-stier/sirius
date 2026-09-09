@@ -75,6 +75,7 @@ void VkRenderer::Init() {
     CreateSwapChain();
     CreateImageViews();
     CreateGraphicsPipeline();
+    CreateVertexBuffer();
     InitCommandBuffers();
     CreateSyncObjects();
 }
@@ -592,14 +593,15 @@ void VkRenderer::CreateVertexBuffer() {
     vk::MemoryRequirements memRequirements = vertexBuffer_.getMemoryRequirements();
     vk::MemoryAllocateInfo memoryAllocateInfo{
         .allocationSize  = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+    };
     vertexBufferMemory_ = vk::raii::DeviceMemory(device_, memoryAllocateInfo);
 
-    vertexBuffer_.bindMemory(*vertexBufferMemory, 0);
+    vertexBuffer_.bindMemory(*vertexBufferMemory_, 0);
 
-    void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
+    void *data = vertexBufferMemory_.mapMemory(0, bufferInfo.size);
     memcpy(data, kVertices.data(), bufferInfo.size);
-    vertexBufferMemory.unmapMemory();
+    vertexBufferMemory_.unmapMemory();
 }
 
 void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const {
@@ -649,6 +651,7 @@ void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameI
     buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
     buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
+    buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
     buffer.draw(3, 1, 0, 0);
 
     // End rendering
@@ -723,6 +726,27 @@ void VkRenderer::TransitionImageLayout(
     };
 
     frames_.at(currentFrameIndex).commandBuffer.pipelineBarrier2(dependencyInfo);
+}
+
+
+/*
+ * Find a memory type for the buffer that is both supported and works for our application
+ * typeFilter specifies suitable memory types by setting their corresponding bit to 1
+ * So to find the indices of suitable types, we just iterate over all and check if their bit is set to 1
+ * memoryProperties.MemoryTypes contains vk::MemoryType structs that specify the heap and properties of each memory type
+ * We check those against the specified properties we need for the buffer
+ * So only a type that's suitable (bit set to 1) and fits our required properties is selected
+ */
+uint32_t VkRenderer::FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+    const vk::PhysicalDeviceMemoryProperties memoryProperties{physicalDevice_.getMemoryProperties()};
+
+    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("No suitable memory type found");
 }
 }
 

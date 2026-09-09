@@ -142,12 +142,11 @@ private:
     void CreateSyncObjects();
     void CreateVertexBuffer();
 
-
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
     void DoDraw();
 
-
+    // Utils
     void SetupDebugMessenger();
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
 
@@ -161,6 +160,9 @@ private:
         vk::PipelineStageFlags2 dstStageMask,
         uint32_t currentFrameIndex
     ) const;
+
+    uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+
 
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
