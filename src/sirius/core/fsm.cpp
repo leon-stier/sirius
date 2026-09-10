@@ -39,7 +39,7 @@ bool Fsm::RunOneIteration() noexcept {
     return true;
 }
 
-void Fsm::SetState(signed short state) noexcept {
+void Fsm::SetState(const signed short state) noexcept {
     nextState_ = state;
 }
 

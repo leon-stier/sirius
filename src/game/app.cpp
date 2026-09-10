@@ -8,7 +8,7 @@
 #include "window/wndProc.h"
 
 
-Fsm::FsmReturn App::UpdateState(signed short state) {
+Fsm::FsmReturn App::UpdateState(const signed short state) {
     switch (state) {
         case kInitSystem:
             return Init();

@@ -128,20 +128,23 @@ private:
     void CreateInstance();
     void CreateSurface();
     void PickPhysicalDevice();
-    bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
+
+    static bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
     void CreateLogicalDevice();
     void CreateSwapChain();
     void RecreateSwapChain();
-    vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
-    vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
-    vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
-    uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
+
+    static vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
+    static vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
+    static vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
+    static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
+
     void CreateImageViews();
     void CreateGraphicsPipeline();
     void InitCommandBuffers();
     void CreateSyncObjects();
     void CreateVertexBuffer();
-    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties);
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
     void DoDraw();
@@ -161,9 +164,9 @@ private:
         uint32_t currentFrameIndex
     ) const;
 
-    uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+    uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
 
-    void CopyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
+    void CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) const;
 
     // Declaration order dictates cleanup order
     vk::raii::Context context_;

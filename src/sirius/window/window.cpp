@@ -4,7 +4,6 @@
 
 #include "window.h"
 
-#include <iostream>
 #include <ostream>
 
 #include "wndProc.h"
@@ -43,7 +42,7 @@ HWND SrsWindow::CreateDeviceWindow() {
         return nullptr;
     }
 
-    HWND result = CreateWindow(
+    const HWND result = CreateWindow(
         "GfxWindow",
         windowTitle.c_str(),
         WS_OVERLAPPEDWINDOW,
@@ -65,11 +64,11 @@ HWND SrsWindow::CreateDeviceWindow() {
     return result;
 }
 
-LRESULT SrsWindow::HandleMessages(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept {
+LRESULT SrsWindow::HandleMessages(const HWND hWnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam) noexcept {
     // if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) {
     //     return true;
     // }
-    switch (msg) {
+    switch (uMsg) {
         case WM_CLOSE:
             closing = true;
             PostQuitMessage(EXIT_SUCCESS);
@@ -89,7 +88,7 @@ LRESULT SrsWindow::HandleMessages(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPa
         default: {
         }
     }
-    return windowProc(hWnd, msg, wParam, lParam);
+    return windowProc(hWnd, uMsg, wParam, lParam);
 }
 
 void SrsWindow::SetWindowTitle(const std::string& title) {

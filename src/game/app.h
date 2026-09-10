@@ -12,7 +12,7 @@ public:
         kShutdownSystem
     };
 
-    FsmReturn UpdateState(signed short state) override;
+
 
     // Implement state machine here later to handle Initialization, Game loop and teardown
     // App can inherit from state machine class, RunOneIteration is part of state machine class
@@ -22,6 +22,8 @@ public:
 
     FsmReturn RunGame();
 
+protected:
+    FsmReturn UpdateState(signed short state) override;
 private:
     bool isSystemInitialized_ = false;
 };
