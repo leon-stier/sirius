@@ -141,7 +141,7 @@ private:
     void InitCommandBuffers();
     void CreateSyncObjects();
     void CreateVertexBuffer();
-
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties);
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
     void DoDraw();
@@ -163,6 +163,7 @@ private:
 
     uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 
+    void CopyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
 
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
@@ -183,9 +184,11 @@ private:
 
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
-    vk::raii::Buffer vertexBuffer_ = nullptr;
-    vk::raii::DeviceMemory vertexBufferMemory_ = nullptr;
+    vk::raii::Buffer vertexBuffer_{nullptr};
+    vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
     std::array<FrameContext, kMaxFramesInFlight> frames_;
+
+    vk::raii::CommandPool ephemeralCommandPool_{nullptr};
 
     vk::raii::Semaphore timelineSemaphore_{nullptr};
     std::vector<vk::raii::Semaphore> renderCompleteSemaphores_;

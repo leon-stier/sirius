@@ -75,8 +75,8 @@ void VkRenderer::Init() {
     CreateSwapChain();
     CreateImageViews();
     CreateGraphicsPipeline();
-    CreateVertexBuffer();
     InitCommandBuffers();
+    CreateVertexBuffer();
     CreateSyncObjects();
 }
 
@@ -559,6 +559,13 @@ void VkRenderer::InitCommandBuffers() {
 
         frame.commandBuffer = std::move(vk::raii::CommandBuffers(device_, allocInfo).front());
     }
+
+    const vk::CommandPoolCreateInfo poolCreateInfo {
+        .flags = vk::CommandPoolCreateFlagBits::eTransient,
+        .queueFamilyIndex = graphicsQueueIndex_
+    };
+
+    ephemeralCommandPool_ = vk::raii::CommandPool(device_, poolCreateInfo);
 }
 
 void VkRenderer::CreateSyncObjects() {
@@ -583,28 +590,39 @@ void VkRenderer::CreateSyncObjects() {
 }
 
 void VkRenderer::CreateVertexBuffer() {
-    const vk::BufferCreateInfo bufferInfo{
-        .size = sizeof(kVertices[0]) * kVertices.size(),
-        .usage = vk::BufferUsageFlagBits::eVertexBuffer,
-        .sharingMode = vk::SharingMode::eExclusive
-    };
-    vertexBuffer_ = vk::raii::Buffer(device_, bufferInfo);
+    vk::DeviceSize bufferSize = sizeof(kVertices[0]) * kVertices.size();
 
-    vk::MemoryRequirements memRequirements = vertexBuffer_.getMemoryRequirements();
-    vk::MemoryAllocateInfo memoryAllocateInfo{
-        .allocationSize  = memRequirements.size,
-        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
-    };
-    vertexBufferMemory_ = vk::raii::DeviceMemory(device_, memoryAllocateInfo);
+    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
-    vertexBuffer_.bindMemory(*vertexBufferMemory_, 0);
+    void *dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+    memcpy(dataStaging, kVertices.data(), bufferSize);
+    stagingBufferMemory.unmapMemory();
 
-    void *data = vertexBufferMemory_.mapMemory(0, bufferInfo.size);
-    memcpy(data, kVertices.data(), bufferInfo.size);
-    vertexBufferMemory_.unmapMemory();
+    std::tie(vertexBuffer_, vertexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    CopyBuffer(stagingBuffer, vertexBuffer_, bufferSize);
 }
 
-void VkRenderer::RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const {
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) {
+    const vk::BufferCreateInfo bufferInfo{
+        .size = size,
+        .usage = bufferUsage,
+        .sharingMode = vk::SharingMode::eExclusive
+    };
+    auto buffer = vk::raii::Buffer(device_, bufferInfo);
+
+    const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+    const vk::MemoryAllocateInfo memoryAllocateInfo{
+        .allocationSize  = memRequirements.size,
+        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, memoryProperties)
+    };
+    auto bufferMemory{vk::raii::DeviceMemory(device_, memoryAllocateInfo)};
+    buffer.bindMemory(bufferMemory, 0);
+
+    return {std::move(buffer), std::move(bufferMemory)};
+}
+
+void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t currentFrameIndex) const {
     auto& buffer = frames_.at(currentFrameIndex).commandBuffer;
     buffer.begin({});
 
@@ -747,6 +765,30 @@ uint32_t VkRenderer::FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags
     }
 
     throw std::runtime_error("No suitable memory type found");
+}
+
+void VkRenderer::CopyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
+    const vk::CommandBufferAllocateInfo allocateInfo {
+        .commandPool = ephemeralCommandPool_,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+    vk::raii::CommandBuffer commandCopyBuffer = std::move(device_.allocateCommandBuffers(allocateInfo).front());
+
+    commandCopyBuffer.begin({
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    });
+
+    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+
+    commandCopyBuffer.end();
+
+    graphicsQueue_.submit(
+        vk::SubmitInfo {
+        .commandBufferCount = 1,
+        .pCommandBuffers = &*commandCopyBuffer
+    }, nullptr);
+    graphicsQueue_.waitIdle();
 }
 }
 
