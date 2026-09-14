@@ -80,9 +80,14 @@ struct Vertex
 };
 
 const std::vector<Vertex> kVertices = {
-    {.pos = {0.0f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
-    {.pos = {0.5f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-    {.pos = {-0.5f, 0.5f}, .color = {0.0f, 0.0f, 1.0f}}
+    {.pos = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
+    {.pos = {0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+    {.pos = {0.5f, 0.5f}, .color = {0.0f, 0.0f, 1.0f}},
+    {.pos = {-0.5f, 0.5f}, .color = {1.0f, 1.0f, 1.0f}}
+};
+
+const std::vector<uint16_t> kIndices = {
+    0, 1, 2, 2, 3, 0
 };
 
 struct FrameContext {
@@ -144,6 +149,7 @@ private:
     void InitCommandBuffers();
     void CreateSyncObjects();
     void CreateVertexBuffer();
+    void CreateIndexBuffer();
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
@@ -189,6 +195,8 @@ private:
     vk::raii::Pipeline graphicsPipeline_{nullptr};
     vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
+    vk::raii::Buffer indexBuffer_{nullptr};
+    vk::raii::DeviceMemory indexBufferMemory_{nullptr};
     std::array<FrameContext, kMaxFramesInFlight> frames_;
 
     vk::raii::CommandPool ephemeralCommandPool_{nullptr};

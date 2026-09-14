@@ -77,6 +77,7 @@ void VkRenderer::Init() {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateVertexBuffer();
+    CreateIndexBuffer();
     CreateSyncObjects();
 }
 
@@ -497,7 +498,7 @@ void VkRenderer::CreateSyncObjects() {
 }
 
 void VkRenderer::CreateVertexBuffer() {
-    const vk::DeviceSize bufferSize = sizeof(kVertices[0]) * kVertices.size();
+    const vk::DeviceSize bufferSize = sizeof(kVertices.at(0)) * kVertices.size();
 
     auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
@@ -508,6 +509,20 @@ void VkRenderer::CreateVertexBuffer() {
     std::tie(vertexBuffer_, vertexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     CopyBuffer(stagingBuffer, vertexBuffer_, bufferSize);
+}
+
+void VkRenderer::CreateIndexBuffer() {
+    const vk::DeviceSize bufferSize = sizeof(kIndices.at(0)) * kIndices.size();
+
+    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+    memcpy(dataStaging, kIndices.data(), bufferSize);
+    stagingBufferMemory.unmapMemory();
+
+    std::tie(indexBuffer_, indexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    CopyBuffer(stagingBuffer, indexBuffer_, bufferSize);
 }
 
 std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags bufferUsage, const vk::MemoryPropertyFlags memoryProperties) const {
@@ -577,7 +592,8 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
     buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
-    buffer.draw(3, 1, 0, 0);
+    buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexType::eUint16);
+    buffer.drawIndexed(static_cast<uint32_t>(kIndices.size()), 1, 0, 0, 0);
 
     // End rendering
     buffer.endRendering();
