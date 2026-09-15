@@ -1,6 +1,7 @@
 #include "vkRenderer.h"
-
 #include "window/wndProc.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace {
 template<typename T>
@@ -74,10 +75,13 @@ void VkRenderer::Init() {
     CreateLogicalDevice();
     CreateSwapChain();
     CreateImageViews();
+    CreateDescriptorSetLayout();
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateVertexBuffer();
     CreateIndexBuffer();
+    CreateUniformBuffers();
+    CreateDescriptorPool();
     CreateSyncObjects();
 }
 
@@ -347,6 +351,20 @@ void VkRenderer::CreateImageViews() {
     }
 }
 
+void VkRenderer::CreateDescriptorSetLayout() {
+    vk::DescriptorSetLayoutBinding uboLayoutBinding {
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex
+    };
+    vk::DescriptorSetLayoutCreateInfo layoutCreateInfo{
+        .bindingCount = 1,
+        .pBindings = &uboLayoutBinding
+    };
+    descriptorSetLayout_ = vk::raii::DescriptorSetLayout(device_, layoutCreateInfo);
+}
+
 void VkRenderer::CreateGraphicsPipeline() {
     std::vector<uint32_t> shaderCode = ReadFile("shaders/shader.spv");
 
@@ -424,7 +442,8 @@ void VkRenderer::CreateGraphicsPipeline() {
     };
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo{
-        .setLayoutCount = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &*descriptorSetLayout_,
         .pushConstantRangeCount = 0
     };
     pipelineLayout_ = vk::raii::PipelineLayout(device_, pipelineLayoutCreateInfo);
@@ -525,6 +544,35 @@ void VkRenderer::CreateIndexBuffer() {
     CopyBuffer(stagingBuffer, indexBuffer_, bufferSize);
 }
 
+void VkRenderer::CreateUniformBuffers() {
+    for (auto& frame : frames_)
+    {
+        constexpr vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+        auto [buffer, bufferMem]  = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        frame.uniformBuffer = std::move(buffer);
+        frame.uniformBufferMemory = std::move(bufferMem);
+        frame.uniformBufferMapped = frame.uniformBufferMemory.mapMemory(0, bufferSize);
+    }
+}
+
+void VkRenderer::CreateDescriptorPool() {
+    vk::DescriptorPoolSize poolSize {
+        .type = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = kMaxFramesInFlight
+    };
+    vk::DescriptorPoolCreateInfo poolCreateInfo {
+        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+        .maxSets = kMaxFramesInFlight,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize
+    };
+    descriptorPool_ = vk::raii::DescriptorPool(device_, poolCreateInfo);
+}
+
+void VkRenderer::CreateDescriptorSets() {
+    
+}
+
 std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags bufferUsage, const vk::MemoryPropertyFlags memoryProperties) const {
     const vk::BufferCreateInfo bufferInfo{
         .size = size,
@@ -589,7 +637,7 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.beginRendering(renderingInfo);
 
     buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
-    buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
+    buffer.setViewport(0, vk::Viewport(0.0f, static_cast<float>(swapChainExtent_.height), static_cast<float>(swapChainExtent_.width), -static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f)); // Inverted height because glm and Vulkan disagree where down is
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
     buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
     buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexType::eUint16);
@@ -611,6 +659,20 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     );
 
     buffer.end();
+}
+
+void VkRenderer::UpdateUniformBuffer(uint32_t currentImage, const uint32_t currentFrameIndex) const {
+    static auto startTime = std::chrono::high_resolution_clock::now();
+
+    const auto currentTime = std::chrono::high_resolution_clock::now();
+    const float time = std::chrono::duration<float>(currentTime - startTime).count();
+
+    UniformBufferObject ubo{};
+    ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height), 0.1f, 10.0f);
+
+    memcpy(frames_.at(currentFrameIndex).uniformBufferMapped, &ubo, sizeof(ubo));
 }
 
 void VkRenderer::DoDraw() {
@@ -646,6 +708,8 @@ void VkRenderer::DoDraw() {
     if (acquireResult != vk::Result::eSuccess && acquireResult != vk::Result::eSuboptimalKHR) {
         throw vk::SystemError(acquireResult, "Failed to acquire next swapchain image");
     }
+
+    UpdateUniformBuffer(imageIndex, currentFrameIndex);
 
     RecordCommandBuffer(imageIndex, currentFrameIndex);
 

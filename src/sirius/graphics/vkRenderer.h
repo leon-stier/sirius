@@ -90,9 +90,21 @@ const std::vector<uint16_t> kIndices = {
     0, 1, 2, 2, 3, 0
 };
 
+struct UniformBufferObject
+{
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
+
 struct FrameContext {
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
+
+    vk::raii::Buffer uniformBuffer{nullptr};
+    vk::raii::DeviceMemory uniformBufferMemory{nullptr};
+    void* uniformBufferMapped{nullptr};
+
     vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
 };
 
@@ -145,14 +157,19 @@ private:
     static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
 
     void CreateImageViews();
+    void CreateDescriptorSetLayout();
     void CreateGraphicsPipeline();
     void InitCommandBuffers();
     void CreateSyncObjects();
     void CreateVertexBuffer();
     void CreateIndexBuffer();
+    void CreateUniformBuffers();
+    void CreateDescriptorPool();
+    void CreateDescriptorSets();
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
+    void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex) const;
     void DoDraw();
 
     // Utils
@@ -191,6 +208,8 @@ private:
     vk::Extent2D swapChainExtent_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
 
+    vk::raii::DescriptorSetLayout descriptorSetLayout_{nullptr};
+    vk::raii::DescriptorPool descriptorPool_{nullptr};
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
     vk::raii::Buffer vertexBuffer_{nullptr};
