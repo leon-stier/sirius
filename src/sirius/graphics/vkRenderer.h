@@ -1,4 +1,6 @@
 #pragma once
+
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
 import vulkan;
@@ -48,7 +50,7 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
 
 struct Vertex
 {
-    glm::vec2 pos;
+    glm::vec3 pos;
     glm::vec3 color;
 
     static vk::VertexInputBindingDescription GetBindingDescription()
@@ -80,14 +82,21 @@ struct Vertex
 };
 
 const std::vector<Vertex> kVertices = {
-    {.pos = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
-    {.pos = {0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-    {.pos = {0.5f, 0.5f}, .color = {0.0f, 0.0f, 1.0f}},
-    {.pos = {-0.5f, 0.5f}, .color = {1.0f, 1.0f, 1.0f}}
+    {.pos = {-0.5f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}},
+    {.pos = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
+    {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+    {.pos = {-0.5f, 0.5f, 0.0f}, .color = {1.0f, 1.0f, 1.0f}},
+
+{.pos = {-0.5f, -0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
+    {.pos = {0.5f, -0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+    {.pos = {0.5f, 0.5f, -0.5f}, .color = {0.0f, 0.0f, 1.0f}},
+    {.pos = {-0.5f, 0.5f, -0.5f}, .color = {1.0f, 1.0f, 1.0f}},
+
 };
 
 const std::vector<uint16_t> kIndices = {
-    0, 1, 2, 2, 3, 0
+    0, 1, 2, 2, 3, 0,
+    4, 5, 6, 6, 7, 4
 };
 
 struct UniformBufferObject
@@ -104,6 +113,8 @@ struct FrameContext {
     vk::raii::Buffer uniformBuffer{nullptr};
     vk::raii::DeviceMemory uniformBufferMemory{nullptr};
     void* uniformBufferMapped{nullptr};
+
+    vk::raii::DescriptorSet descriptorSet{nullptr};
 
     vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
 };
@@ -157,9 +168,13 @@ private:
     static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
 
     void CreateImageViews();
+    vk::raii::ImageView CreateImageView(vk::Image const& image, vk::Format format, vk::ImageAspectFlags aspectFlags) const;
     void CreateDescriptorSetLayout();
     void CreateGraphicsPipeline();
     void InitCommandBuffers();
+    std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const;
+    vk::Format FindSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const;
+    void CreateDepthResources();
     void CreateSyncObjects();
     void CreateVertexBuffer();
     void CreateIndexBuffer();
@@ -212,6 +227,11 @@ private:
     vk::raii::DescriptorPool descriptorPool_{nullptr};
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
+
+    vk::raii::Image        depthImage_       = nullptr;
+    vk::raii::DeviceMemory depthImageMemory_ = nullptr;
+    vk::raii::ImageView    depthImageView_   = nullptr;
+
     vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
     vk::raii::Buffer indexBuffer_{nullptr};

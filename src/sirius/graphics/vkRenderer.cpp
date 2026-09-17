@@ -78,10 +78,12 @@ void VkRenderer::Init() {
     CreateDescriptorSetLayout();
     CreateGraphicsPipeline();
     InitCommandBuffers();
+    CreateDepthResources();
     CreateVertexBuffer();
     CreateIndexBuffer();
     CreateUniformBuffers();
     CreateDescriptorPool();
+    CreateDescriptorSets();
     CreateSyncObjects();
 }
 
@@ -333,22 +335,28 @@ uint32_t VkRenderer::ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& c
 }
 
 void VkRenderer::CreateImageViews() {
-    vk::ImageViewCreateInfo imageViewCreateInfo{
+    swapChainImageViews_.reserve(swapChainImages_.size());
+
+    for (const auto& image : swapChainImages_) {
+        swapChainImageViews_.emplace_back(CreateImageView(image, swapChainSurfaceFormat_.format, vk::ImageAspectFlagBits::eColor));
+    }
+}
+
+vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk::Format format, const vk::ImageAspectFlags aspectFlags) const {
+    const vk::ImageViewCreateInfo viewCreateInfo {
+        .image = image,
         .viewType = vk::ImageViewType::e2D,
-        .format = swapChainSurfaceFormat_.format,
+        .format = format,
         .subresourceRange = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .aspectMask = aspectFlags,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
-            .layerCount = 1
+            .layerCount =  1
         }
     };
 
-    for (const auto& image : swapChainImages_) {
-        imageViewCreateInfo.image = image;
-        swapChainImageViews_.emplace_back(device_, imageViewCreateInfo);
-    }
+    return vk::raii::ImageView(device_, viewCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
@@ -419,7 +427,7 @@ void VkRenderer::CreateGraphicsPipeline() {
         .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = vk::CullModeFlagBits::eBack,
-        .frontFace = vk::FrontFace::eClockwise,
+        .frontFace = vk::FrontFace::eCounterClockwise,
         .depthBiasEnable = vk::False,
         .lineWidth = 1.0f
     };
@@ -496,6 +504,55 @@ void VkRenderer::InitCommandBuffers() {
     ephemeralCommandPool_ = vk::raii::CommandPool(device_, poolCreateInfo);
 }
 
+std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const uint32_t width, const uint32_t height, const vk::Format format, const vk::ImageTiling tiling, const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties) const {
+    const vk::ImageCreateInfo imageInfo{
+        .imageType   = vk::ImageType::e2D,
+        .format      = format,
+        .extent      = {.width = width, .height = height, .depth = 1},
+        .mipLevels   = 1,
+        .arrayLayers = 1,
+        .samples     = vk::SampleCountFlagBits::e1,
+        .tiling      = tiling,
+        .usage       = usage,
+        .sharingMode = vk::SharingMode::eExclusive
+    };
+
+    auto image = vk::raii::Image(device_, imageInfo);
+
+    const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
+    const vk::MemoryAllocateInfo allocInfo{
+        .allocationSize  = memRequirements.size,
+        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
+    };
+    auto imageMemory = vk::raii::DeviceMemory(device_, allocInfo);
+    image.bindMemory(imageMemory, 0);
+
+    return {std::move(image), std::move(imageMemory)};
+}
+
+vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candidates, const vk::ImageTiling tiling, const vk::FormatFeatureFlags features) const {
+    for (const auto format : candidates) {
+        vk::FormatProperties props = physicalDevice_.getFormatProperties(format);
+
+        if ((
+            tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) ||
+            (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features))
+        {
+            return format;
+        }
+    }
+
+    throw std::runtime_error("Failed to find supported Format!");
+}
+
+
+void VkRenderer::CreateDepthResources() {
+    vk::Format depthFormat = FindSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint}, vk::ImageTiling::eOptimal, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+
+    std::tie(depthImage_, depthImageMemory_) = CreateImage(swapChainExtent_.width, swapChainExtent_.height, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    depthImageView_ = CreateImageView(depthImage_, depthFormat, vk::ImageAspectFlagBits::eDepth);
+}
+
 void VkRenderer::CreateSyncObjects() {
     vk::SemaphoreTypeCreateInfo semaphoreTypeCreateInfo{
         .semaphoreType = vk::SemaphoreType::eTimeline,
@@ -570,7 +627,33 @@ void VkRenderer::CreateDescriptorPool() {
 }
 
 void VkRenderer::CreateDescriptorSets() {
-    
+    std::vector<vk::DescriptorSetLayout> layouts(kMaxFramesInFlight, *descriptorSetLayout_);
+    vk::DescriptorSetAllocateInfo allocInfo{
+        .descriptorPool = descriptorPool_,
+        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+        .pSetLayouts = layouts.data()
+    };
+
+    for (auto&& [frame, set] : std::views::zip(frames_, device_.allocateDescriptorSets(allocInfo))) {
+        frame.descriptorSet = std::move(set);
+    }
+
+    for (auto& frame : frames_) {
+        vk::DescriptorBufferInfo bufferInfo {
+            .buffer = frame.uniformBuffer,
+            .offset = 0,
+            .range =  sizeof(UniformBufferObject)
+        };
+        vk::WriteDescriptorSet descriptorWrite {
+            .dstSet = frame.descriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .pBufferInfo = &bufferInfo
+        };
+        device_.updateDescriptorSets(descriptorWrite, {});
+    }
 }
 
 std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags bufferUsage, const vk::MemoryPropertyFlags memoryProperties) const {
@@ -641,6 +724,8 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
     buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
     buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexType::eUint16);
+    buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, *frames_.at(currentFrameIndex).descriptorSet, nullptr);
+
     buffer.drawIndexed(static_cast<uint32_t>(kIndices.size()), 1, 0, 0, 0);
 
     // End rendering
