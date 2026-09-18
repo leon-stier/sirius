@@ -17,7 +17,7 @@ LRESULT CALLBACK InputWindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 
 void InputManager::Init() {
     windowProc = InputWindowProc;
-    ShowCursor(false);
+    // ShowCursor(false);
 }
 
 std::pair<float, float> InputManager::GetMouseCoords() {
@@ -92,7 +92,7 @@ LRESULT CALLBACK InputManager::ProcessMessage(HWND hWnd, UINT msg, WPARAM wParam
         }
         case WM_RBUTTONDOWN: {
             if (const auto [x, y] = MAKEPOINTS(lParam); x >= 0 && x < windowWidth && y >= 0 && y < windowHeight) {
-                ShowCursor(false);
+                // ShowCursor(false);
                 captureMouse_ = true;
             }
             break;
