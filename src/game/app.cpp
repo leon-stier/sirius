@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "graphics/renderer.h"
+#include "input/input_manager.h"
 #include "window/window.h"
 #include "window/wndProc.h"
 
@@ -32,6 +33,7 @@ Fsm::FsmReturn App::Init() {
         SetState(kShutdownSystem);
         return kExit;
     }
+    sirius::InputManager::Init();
     SetState(kRunGame);
     return kContinue;
 }
@@ -55,6 +57,7 @@ Fsm::FsmReturn App::RunGame() {
         SetState(kShutdownSystem);
         return kContinue;
     }
+    sirius::InputManager::Notify();
     sirius::Renderer::Draw();
     return kContinue;
 }

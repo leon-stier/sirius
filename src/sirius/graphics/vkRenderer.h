@@ -1,5 +1,6 @@
 #pragma once
 
+#include "input/input_manager.h"
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
@@ -8,6 +9,7 @@ import vulkan;
 
 
 namespace sirius {
+struct InputEvent;
 
 const std::vector kValidationLayers = {
     "VK_LAYER_KHRONOS_validation",
@@ -23,6 +25,10 @@ constexpr bool kEnableValidationLayers = true;
 #endif
 
 
+template<class... Ts>
+struct Overload : Ts...{
+    using Ts::operator()...;
+};
 
 static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     if (!std::filesystem::exists(filePath)) {
@@ -68,7 +74,7 @@ struct Vertex
             {
                 .location = 0,
                 .binding = 0,
-                .format = vk::Format::eR32G32Sfloat,
+                .format = vk::Format::eR32G32B32Sfloat,
                 .offset = offsetof(Vertex, pos)
             },
         {
@@ -76,28 +82,26 @@ struct Vertex
             .binding = 0,
             .format = vk::Format::eR32G32B32Sfloat,
             .offset = offsetof(Vertex, color)
-            }
+            },
         }};
     }
 };
 
 const std::vector<Vertex> kVertices = {
-    {.pos = {-0.5f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}},
-    {.pos = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
-    {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-    {.pos = {-0.5f, 0.5f, 0.0f}, .color = {1.0f, 1.0f, 1.0f}},
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
 
-{.pos = {-0.5f, -0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
-    {.pos = {0.5f, -0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-    {.pos = {0.5f, 0.5f, -0.5f}, .color = {0.0f, 0.0f, 1.0f}},
-    {.pos = {-0.5f, 0.5f, -0.5f}, .color = {1.0f, 1.0f, 1.0f}},
-
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}}
 };
 
 const std::vector<uint16_t> kIndices = {
     0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
-};
+      4, 5, 6, 6, 7, 4};
 
 struct UniformBufferObject
 {
@@ -174,6 +178,7 @@ private:
     void InitCommandBuffers();
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const;
     vk::Format FindSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const;
+    vk::Format FindDepthFormat() const;
     void CreateDepthResources();
     void CreateSyncObjects();
     void CreateVertexBuffer();
@@ -187,18 +192,20 @@ private:
     void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex) const;
     void DoDraw();
 
+    void ProcessCameraEvent(InputEvent event);
     // Utils
     void SetupDebugMessenger();
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
 
     void TransitionImageLayout(
-        uint32_t imageIndex,
+        vk::Image image,
         vk::ImageLayout oldLayout,
         vk::ImageLayout newLayout,
         vk::AccessFlags2 srcAccessMask,
         vk::AccessFlags2 dstAccessMask,
         vk::PipelineStageFlags2 srcStageMask,
         vk::PipelineStageFlags2 dstStageMask,
+        vk::ImageAspectFlags imageAspectFlags,
         uint32_t currentFrameIndex
     ) const;
 
@@ -246,5 +253,7 @@ private:
     uint64_t frameIndex_{0};
     uint64_t nextSignalValue_{kMaxFramesInFlight + 1};
     bool requireSwapChainRecreate_{false};
+
+    glm::vec3 cameraCoords_ {2.0f , 2.0f, 2.0f};
 };
 }
