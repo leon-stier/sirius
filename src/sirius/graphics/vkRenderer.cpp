@@ -1,7 +1,11 @@
+#define TINYOBJLOADER_IMPLEMENTATION
+
 #include "vkRenderer.h"
 #include "window/wndProc.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+
+
 
 
 namespace {
@@ -80,6 +84,7 @@ void VkRenderer::Init() {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateDepthResources();
+    LoadModel();
     CreateVertexBuffer();
     CreateIndexBuffer();
     CreateUniformBuffers();
@@ -591,12 +596,12 @@ void VkRenderer::CreateSyncObjects() {
 }
 
 void VkRenderer::CreateVertexBuffer() {
-    const vk::DeviceSize bufferSize = sizeof(kVertices.at(0)) * kVertices.size();
+    const vk::DeviceSize bufferSize = sizeof(vertices_.at(0)) * vertices_.size();
 
     auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
     void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, kVertices.data(), bufferSize);
+    memcpy(dataStaging, vertices_.data(), bufferSize);
     stagingBufferMemory.unmapMemory();
 
     std::tie(vertexBuffer_, vertexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
@@ -605,12 +610,12 @@ void VkRenderer::CreateVertexBuffer() {
 }
 
 void VkRenderer::CreateIndexBuffer() {
-    const vk::DeviceSize bufferSize = sizeof(kIndices.at(0)) * kIndices.size();
+    const vk::DeviceSize bufferSize = sizeof(indices_.at(0)) * indices_.size();
 
     auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
     void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, kIndices.data(), bufferSize);
+    memcpy(dataStaging, indices_.data(), bufferSize);
     stagingBufferMemory.unmapMemory();
 
     std::tie(indexBuffer_, indexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
@@ -692,6 +697,34 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(con
     return {std::move(buffer), std::move(bufferMemory)};
 }
 
+void VkRenderer::LoadModel() {
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+    std::string warn, err;
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "../../resources/viking_room.obj"))
+    {
+        throw std::runtime_error(warn + err);
+    }
+
+    for (const auto& shape : shapes) {
+        for (const auto& index : shape.mesh.indices) {
+            Vertex vertex{};
+
+            vertex.pos = {
+                attrib.vertices[3 * index.vertex_index + 0],
+                attrib.vertices[3 * index.vertex_index + 1],
+                attrib.vertices[3 * index.vertex_index + 2]
+            };
+            vertex.color = {1.0f, 1.0f, 1.0f};
+
+            vertices_.push_back(vertex);
+            indices_.push_back(indices_.size());
+        }
+    }
+}
+
 void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t currentFrameIndex) const {
     auto& buffer = frames_.at(currentFrameIndex).commandBuffer;
     buffer.begin({});
@@ -764,10 +797,10 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.setViewport(0, vk::Viewport(0.0f, static_cast<float>(swapChainExtent_.height), static_cast<float>(swapChainExtent_.width), -static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f)); // Inverted height because glm and Vulkan disagree where down is
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
     buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
-    buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexType::eUint16);
+    buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexTypeValue<decltype(indices_)::value_type>::value);
     buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, *frames_.at(currentFrameIndex).descriptorSet, nullptr);
 
-    buffer.drawIndexed(static_cast<uint32_t>(kIndices.size()), 1, 0, 0, 0);
+    buffer.drawIndexed(static_cast<uint32_t>(indices_.size()), 1, 0, 0, 0);
 
     // End rendering
     buffer.endRendering();

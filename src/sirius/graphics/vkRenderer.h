@@ -1,8 +1,10 @@
 #pragma once
-
 #include "input/input_manager.h"
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+
+#include <tiny_obj_loader.h>
+
 
 import vulkan;
 #include <vulkan/vk_platform.h>
@@ -87,34 +89,6 @@ struct Vertex
     }
 };
 
-const std::vector<Vertex> kVertices = {
-    // Front face (0-3)
-    {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{ 0.5f, -0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 1.0f}},
-
-    // Back face (4-7)
-    {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}}
-};
-
-const std::vector<uint16_t> kIndices = {
-    // Front
-    0, 1, 2,  2, 3, 0,
-    // Back
-    4, 5, 6,  6, 7, 4,
-    // Top
-    3, 2, 7,  7, 6, 3,
-    // Bottom
-    5, 4, 1,  1, 0, 5,
-    // Right
-    1, 4, 7,  7, 2, 1,
-    // Left
-    5, 0, 3,  3, 6, 5
-};
 
 struct UniformBufferObject
 {
@@ -200,6 +174,9 @@ private:
     void CreateDescriptorPool();
     void CreateDescriptorSets();
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
+
+    //////////// Scene ////////////
+    void LoadModel();
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
     void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex) const;
@@ -252,6 +229,8 @@ private:
     vk::raii::DeviceMemory depthImageMemory_ = nullptr;
     vk::raii::ImageView    depthImageView_   = nullptr;
 
+    std::vector<Vertex> vertices_;
+    std::vector<uint32_t> indices_;
     vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
     vk::raii::Buffer indexBuffer_{nullptr};
