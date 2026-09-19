@@ -3,6 +3,8 @@
 #include "vkRenderer.h"
 #include "window/wndProc.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 
@@ -84,6 +86,7 @@ void VkRenderer::Init() {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateDepthResources();
+    CreateTextureImage();
     LoadModel();
     CreateVertexBuffer();
     CreateIndexBuffer();
@@ -595,6 +598,36 @@ void VkRenderer::CreateSyncObjects() {
     }
 }
 
+void VkRenderer::CreateTextureImage() {
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load("../../resources/statue.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+    if (!pixels) {
+        throw std::runtime_error("Failed to load texture image!");
+    }
+
+    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void* data = stagingBufferMemory.mapMemory(0, imageSize);
+    memcpy(data, pixels, imageSize);
+    stagingBufferMemory.unmapMemory();
+
+    stbi_image_free(pixels);
+
+    std::tie(textureImage_, textureImageMemory_) = CreateImage(
+        texWidth,
+        texHeight,
+        vk::Format::eR8G8B8A8Srgb,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        vk::MemoryPropertyFlagBits::eDeviceLocal
+    );
+
+    vk::raii::CommandBuffer commandBuffer = BeginSingleTimeCommands();
+    TransitionImageLayout(commandBuffer, textureImage_, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+}
+
 void VkRenderer::CreateVertexBuffer() {
     const vk::DeviceSize bufferSize = sizeof(vertices_.at(0)) * vertices_.size();
 
@@ -1040,26 +1073,52 @@ uint32_t VkRenderer::FindMemoryType(const uint32_t typeFilter, const vk::MemoryP
 }
 
 void VkRenderer::CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, const vk::DeviceSize size) const {
+    vk::raii::CommandBuffer commandCopyBuffer = BeginSingleTimeCommands();
+    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy{.size = size});
+    EndSingleTimeCommands(std::move(commandCopyBuffer));
+}
+
+void VkRenderer::CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const vk::raii::Buffer& buffer, const vk::raii::Image& image, const uint32_t width, const uint32_t height) {
+    const vk::BufferImageCopy region {
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .imageOffset = { .x = 0, .y = 0, .z = 0 },
+        .imageExtent = { .width = width, .height = height, .depth = 1 }
+    };
+    commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+}
+
+vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
     const vk::CommandBufferAllocateInfo allocateInfo{
         .commandPool = ephemeralCommandPool_,
         .level = vk::CommandBufferLevel::ePrimary,
         .commandBufferCount = 1,
     };
-    const vk::raii::CommandBuffer commandCopyBuffer = std::move(device_.allocateCommandBuffers(allocateInfo).front());
+    vk::raii::CommandBuffer commandBuffer = std::move(device_.allocateCommandBuffers(allocateInfo).front());
 
-    commandCopyBuffer.begin({
+    commandBuffer.begin({
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
     });
 
-    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+    return std::move(commandBuffer);
+}
 
-    commandCopyBuffer.end();
+void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const {
+    commandBuffer.end();
 
-    graphicsQueue_.submit(
-        vk::SubmitInfo{
-            .commandBufferCount = 1,
-            .pCommandBuffers = &*commandCopyBuffer
-        }, nullptr);
+    const vk::SubmitInfo submitInfo {
+        .commandBufferCount = 1,
+        .pCommandBuffers = &*commandBuffer
+    };
+
+    graphicsQueue_.submit(submitInfo, nullptr);
     graphicsQueue_.waitIdle();
 }
 }

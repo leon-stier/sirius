@@ -168,6 +168,7 @@ private:
     vk::Format FindDepthFormat() const;
     void CreateDepthResources();
     void CreateSyncObjects();
+    void CreateTextureImage();
     void CreateVertexBuffer();
     void CreateIndexBuffer();
     void CreateUniformBuffers();
@@ -177,13 +178,15 @@ private:
 
     //////////// Scene ////////////
     void LoadModel();
+
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
     void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex) const;
     void DoDraw();
 
     void ProcessCameraEvent(InputEvent event);
-    // Utils
+
+    //////////// Utils ////////////
     void SetupDebugMessenger();
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
 
@@ -201,7 +204,11 @@ private:
 
     uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
 
-    void CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) const;
+    void CopyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer, vk::DeviceSize size) const;
+    void CopyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, const vk::raii::Image &image, uint32_t width, uint32_t height);
+
+    vk::raii::CommandBuffer BeginSingleTimeCommands() const;
+    void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
     // Declaration order dictates cleanup order
     vk::raii::Context context_;
@@ -225,9 +232,12 @@ private:
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
 
-    vk::raii::Image        depthImage_       = nullptr;
-    vk::raii::DeviceMemory depthImageMemory_ = nullptr;
-    vk::raii::ImageView    depthImageView_   = nullptr;
+    vk::raii::Image textureImage_{nullptr};
+    vk::raii::DeviceMemory textureImageMemory_{nullptr};
+    
+    vk::raii::Image depthImage_{nullptr};
+    vk::raii::DeviceMemory depthImageMemory_{nullptr};
+    vk::raii::ImageView depthImageView_{nullptr};
 
     std::vector<Vertex> vertices_;
     std::vector<uint32_t> indices_;

@@ -3,5 +3,9 @@
     "name" : "glm"
   }, {
     "name" : "tinyobjloader"
-  } ]
+  }, {
+    "name" : "stb"
+  } ],
+  "name" : "sirius",
+  "version-string" : "0.0.1"
 }
