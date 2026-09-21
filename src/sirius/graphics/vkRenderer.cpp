@@ -8,8 +8,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 
-
-
 namespace {
 template<typename T>
 bool SupportsAllRequiredFeatures(const T& required, const T& queried) {
@@ -86,7 +84,7 @@ void VkRenderer::Init() {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateDepthResources();
-    CreateTextureImage();
+    // CreateTextureImage();
     LoadModel();
     CreateVertexBuffer();
     CreateIndexBuffer();
@@ -353,7 +351,7 @@ void VkRenderer::CreateImageViews() {
 }
 
 vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk::Format format, const vk::ImageAspectFlags aspectFlags) const {
-    const vk::ImageViewCreateInfo viewCreateInfo {
+    const vk::ImageViewCreateInfo viewCreateInfo{
         .image = image,
         .viewType = vk::ImageViewType::e2D,
         .format = format,
@@ -362,7 +360,7 @@ vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
-            .layerCount =  1
+            .layerCount = 1
         }
     };
 
@@ -370,7 +368,7 @@ vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
-    vk::DescriptorSetLayoutBinding uboLayoutBinding {
+    vk::DescriptorSetLayoutBinding uboLayoutBinding{
         .binding = 0,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
         .descriptorCount = 1,
@@ -527,14 +525,14 @@ void VkRenderer::InitCommandBuffers() {
 
 std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const uint32_t width, const uint32_t height, const vk::Format format, const vk::ImageTiling tiling, const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties) const {
     const vk::ImageCreateInfo imageInfo{
-        .imageType   = vk::ImageType::e2D,
-        .format      = format,
-        .extent      = {.width = width, .height = height, .depth = 1},
-        .mipLevels   = 1,
+        .imageType = vk::ImageType::e2D,
+        .format = format,
+        .extent = {.width = width, .height = height, .depth = 1},
+        .mipLevels = 1,
         .arrayLayers = 1,
-        .samples     = vk::SampleCountFlagBits::e1,
-        .tiling      = tiling,
-        .usage       = usage,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = tiling,
+        .usage = usage,
         .sharingMode = vk::SharingMode::eExclusive
     };
 
@@ -542,7 +540,7 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
 
     const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
     const vk::MemoryAllocateInfo allocInfo{
-        .allocationSize  = memRequirements.size,
+        .allocationSize = memRequirements.size,
         .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
     };
     auto imageMemory = vk::raii::DeviceMemory(device_, allocInfo);
@@ -556,9 +554,8 @@ vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candid
         vk::FormatProperties props = physicalDevice_.getFormatProperties(format);
 
         if ((
-            tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) ||
-            (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features))
-        {
+                tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) ||
+            (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features)) {
             return format;
         }
     }
@@ -567,7 +564,7 @@ vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candid
 }
 
 vk::Format VkRenderer::FindDepthFormat() const {
-    return FindSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},vk::ImageTiling::eOptimal, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+    return FindSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint}, vk::ImageTiling::eOptimal, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
 }
 
 
@@ -625,7 +622,33 @@ void VkRenderer::CreateTextureImage() {
     );
 
     vk::raii::CommandBuffer commandBuffer = BeginSingleTimeCommands();
-    TransitionImageLayout(commandBuffer, textureImage_, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    // TransitionImageLayout(
+    //     textureImage_,
+    //     commandBuffer,
+    //     vk::ImageLayout::eUndefined,
+    //     vk::ImageLayout::eTransferDstOptimal,
+    //     {},
+    //     vk::AccessFlagBits2::eTransferWrite,
+    //     vk::PipelineStageFlagBits2::eTopOfPipe,
+    //     vk::PipelineStageFlagBits2::eTransfer,
+    //     vk::ImageAspectFlagBits::eColor
+    // );
+    //
+    // CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
+    //
+    // TransitionImageLayout(
+    //     textureImage_,
+    //     commandBuffer,
+    //     vk::ImageLayout::eTransferDstOptimal,
+    //     vk::ImageLayout::eShaderReadOnlyOptimal,
+    //     vk::AccessFlagBits2::eTransferWrite,
+    //     vk::AccessFlagBits2::eShaderRead,
+    //     vk::PipelineStageFlagBits2::eTransfer,
+    //     vk::PipelineStageFlagBits2::eFragmentShader,
+    //     vk::ImageAspectFlagBits::eColor
+    // );
+
+    EndSingleTimeCommands(std::move(commandBuffer));
 }
 
 void VkRenderer::CreateVertexBuffer() {
@@ -657,10 +680,9 @@ void VkRenderer::CreateIndexBuffer() {
 }
 
 void VkRenderer::CreateUniformBuffers() {
-    for (auto& frame : frames_)
-    {
+    for (auto& frame : frames_) {
         constexpr vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
-        auto [buffer, bufferMem]  = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        auto [buffer, bufferMem] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         frame.uniformBuffer = std::move(buffer);
         frame.uniformBufferMemory = std::move(bufferMem);
         frame.uniformBufferMapped = frame.uniformBufferMemory.mapMemory(0, bufferSize);
@@ -668,11 +690,11 @@ void VkRenderer::CreateUniformBuffers() {
 }
 
 void VkRenderer::CreateDescriptorPool() {
-    vk::DescriptorPoolSize poolSize {
+    vk::DescriptorPoolSize poolSize{
         .type = vk::DescriptorType::eUniformBuffer,
         .descriptorCount = kMaxFramesInFlight
     };
-    vk::DescriptorPoolCreateInfo poolCreateInfo {
+    vk::DescriptorPoolCreateInfo poolCreateInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets = kMaxFramesInFlight,
         .poolSizeCount = 1,
@@ -694,12 +716,12 @@ void VkRenderer::CreateDescriptorSets() {
     }
 
     for (auto& frame : frames_) {
-        vk::DescriptorBufferInfo bufferInfo {
+        vk::DescriptorBufferInfo bufferInfo{
             .buffer = frame.uniformBuffer,
             .offset = 0,
-            .range =  sizeof(UniformBufferObject)
+            .range = sizeof(UniformBufferObject)
         };
-        vk::WriteDescriptorSet descriptorWrite {
+        vk::WriteDescriptorSet descriptorWrite{
             .dstSet = frame.descriptorSet,
             .dstBinding = 0,
             .dstArrayElement = 0,
@@ -736,8 +758,7 @@ void VkRenderer::LoadModel() {
     std::vector<tinyobj::material_t> materials;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "../../resources/viking_room.obj"))
-    {
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "../../resources/viking_room.obj")) {
         throw std::runtime_error(warn + err);
     }
 
@@ -765,27 +786,27 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     // Transition the image layout for rendering
     TransitionImageLayout(
         swapChainImages_[imageIndex],
+        frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eUndefined,
         vk::ImageLayout::eColorAttachmentOptimal,
         {},
         vk::AccessFlagBits2::eColorAttachmentWrite,
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::ImageAspectFlagBits::eColor,
-        currentFrameIndex
+        vk::ImageAspectFlagBits::eColor
     );
 
     // Transition the depth image to depth attachment optimal layout
     TransitionImageLayout(
         *depthImage_,
+        frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eUndefined,
         vk::ImageLayout::eDepthAttachmentOptimal,
         vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
         vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
         vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::ImageAspectFlagBits::eDepth,
-        currentFrameIndex
+        vk::ImageAspectFlagBits::eDepth
     );
 
     // Set up the color attachment
@@ -800,7 +821,7 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
         .clearValue = clearColor
     };
 
-    vk::RenderingAttachmentInfo depthAttachmentInfo {
+    vk::RenderingAttachmentInfo depthAttachmentInfo{
         .imageView = depthImageView_,
         .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
         .loadOp = vk::AttachmentLoadOp::eClear,
@@ -841,14 +862,14 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     // Transition the image layout for presentation
     TransitionImageLayout(
         swapChainImages_[imageIndex],
+        frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eColorAttachmentOptimal,
         vk::ImageLayout::ePresentSrcKHR,
         vk::AccessFlagBits2::eColorAttachmentWrite,
         {},
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::PipelineStageFlagBits2::eBottomOfPipe,
-        vk::ImageAspectFlagBits::eColor,
-        currentFrameIndex
+        vk::ImageAspectFlagBits::eColor
     );
 
     buffer.end();
@@ -966,32 +987,32 @@ void VkRenderer::DoDraw() {
 }
 
 void VkRenderer::ProcessCameraEvent(const InputEvent event) {
-    std::visit( Overload{
-        [this](MouseMoveEvent e) {
-            // yaw_ += static_cast<float>(e.x) / 500.0f;
-            // pitch_ -= static_cast<float>(e.y) / 500.0f;
-
-        },
-        [](MouseWheelEvent e) {},
-        [this, event](const KeyEvent e) {
-            if (event.type == InputEvent::Type::kKeyDown) {
-                if (e.key == 'W') cameraCoords_.z += 1;
-                if (e.key == 'S') cameraCoords_.z -= 1;
-                if (e.key == 'A') cameraCoords_.x += 1;
-                if (e.key == 'D') cameraCoords_.x -= 1;
-                if (e.key == VK_SPACE) cameraCoords_.y -= 1;
-                if (e.key == VK_CONTROL) cameraCoords_.y += 1;
-            }
-            // if (event.type == InputEvent::Type::kKeyUp) {
-            //     if (e.key == 'W') cameraCoords_.z = 0;
-            //     if (e.key == 'S') cameraCoords_.z = 0;
-            //     if (e.key == 'A') cameraCoords_.x = 0;
-            //     if (e.key == 'D') cameraCoords_.x = 0;
-            //     if (e.key == VK_SPACE) cameraCoords_.y = 0;
-            //     if (e.key == VK_CONTROL) cameraCoords_.y = 0;
-            // }
-        }
-    }, event.data);
+    std::visit(Overload{
+                   [this](MouseMoveEvent e) {
+                       // yaw_ += static_cast<float>(e.x) / 500.0f;
+                       // pitch_ -= static_cast<float>(e.y) / 500.0f;
+                   },
+                   [](MouseWheelEvent e) {
+                   },
+                   [this, event](const KeyEvent e) {
+                       if (event.type == InputEvent::Type::kKeyDown) {
+                           if (e.key == 'W') cameraCoords_.z += 1;
+                           if (e.key == 'S') cameraCoords_.z -= 1;
+                           if (e.key == 'A') cameraCoords_.x += 1;
+                           if (e.key == 'D') cameraCoords_.x -= 1;
+                           if (e.key == VK_SPACE) cameraCoords_.y -= 1;
+                           if (e.key == VK_CONTROL) cameraCoords_.y += 1;
+                       }
+                       // if (event.type == InputEvent::Type::kKeyUp) {
+                       //     if (e.key == 'W') cameraCoords_.z = 0;
+                       //     if (e.key == 'S') cameraCoords_.z = 0;
+                       //     if (e.key == 'A') cameraCoords_.x = 0;
+                       //     if (e.key == 'D') cameraCoords_.x = 0;
+                       //     if (e.key == VK_SPACE) cameraCoords_.y = 0;
+                       //     if (e.key == VK_CONTROL) cameraCoords_.y = 0;
+                       // }
+                   }
+               }, event.data);
 }
 
 void VkRenderer::SetupDebugMessenger() {
@@ -1014,15 +1035,14 @@ vk::Bool32 VkRenderer::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT se
 
 void VkRenderer::TransitionImageLayout(
     const vk::Image image,
+    const vk::raii::CommandBuffer& commandBuffer,
     const vk::ImageLayout oldLayout,
     const vk::ImageLayout newLayout,
     const vk::AccessFlags2 srcAccessMask,
     const vk::AccessFlags2 dstAccessMask,
     const vk::PipelineStageFlags2 srcStageMask,
     const vk::PipelineStageFlags2 dstStageMask,
-    const vk::ImageAspectFlags imageAspectFlags,
-    const uint32_t currentFrameIndex) const {
-
+    const vk::ImageAspectFlags imageAspectFlags) const {
     vk::ImageMemoryBarrier2 barrier = {
         .srcStageMask = srcStageMask,
         .srcAccessMask = srcAccessMask,
@@ -1048,7 +1068,7 @@ void VkRenderer::TransitionImageLayout(
         .pImageMemoryBarriers = &barrier
     };
 
-    frames_.at(currentFrameIndex).commandBuffer.pipelineBarrier2(dependencyInfo);
+    commandBuffer.pipelineBarrier2(dependencyInfo);
 }
 
 
@@ -1079,7 +1099,7 @@ void VkRenderer::CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::B
 }
 
 void VkRenderer::CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const vk::raii::Buffer& buffer, const vk::raii::Image& image, const uint32_t width, const uint32_t height) {
-    const vk::BufferImageCopy region {
+    const vk::BufferImageCopy region{
         .bufferOffset = 0,
         .bufferRowLength = 0,
         .bufferImageHeight = 0,
@@ -1089,8 +1109,8 @@ void VkRenderer::CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer,
             .baseArrayLayer = 0,
             .layerCount = 1
         },
-        .imageOffset = { .x = 0, .y = 0, .z = 0 },
-        .imageExtent = { .width = width, .height = height, .depth = 1 }
+        .imageOffset = {.x = 0, .y = 0, .z = 0},
+        .imageExtent = {.width = width, .height = height, .depth = 1}
     };
     commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
 }
@@ -1113,7 +1133,7 @@ vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
 void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const {
     commandBuffer.end();
 
-    const vk::SubmitInfo submitInfo {
+    const vk::SubmitInfo submitInfo{
         .commandBufferCount = 1,
         .pCommandBuffers = &*commandBuffer
     };
