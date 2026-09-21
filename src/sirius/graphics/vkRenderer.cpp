@@ -208,13 +208,13 @@ void VkRenderer::PickPhysicalDevice() {
 bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
     using Req = PhysicalDeviceRequirements;
     // 1. API version check
-    if (physicalDevice.getProperties().apiVersion < Req::minApiVersion) return false;
+    if (physicalDevice.getProperties2().properties.apiVersion < Req::minApiVersion) return false;
 
 
     // 2. Queue family check
-    auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+    auto queueFamilies = physicalDevice.getQueueFamilyProperties2();
     if (!std::ranges::any_of(queueFamilies, [](const auto& qfp) {
-        return static_cast<bool>(qfp.queueFlags & Req::queueFlagBits);
+        return static_cast<bool>(qfp.queueFamilyProperties.queueFlags & Req::queueFlagBits);
     }))
         return false; // Return early if queues are not supported
 
@@ -231,14 +231,14 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
 }
 
 void VkRenderer::CreateLogicalDevice() {
-    std::vector queueFamilyProperties = physicalDevice_.getQueueFamilyProperties();
+    std::vector queueFamilyProperties = physicalDevice_.getQueueFamilyProperties2();
 
     auto enumeratedProperties = queueFamilyProperties | std::views::enumerate;
 
     const auto it = std::ranges::find_if(enumeratedProperties, [this](const auto& tuple) {
         auto [index, qfp] = tuple;
 
-        const bool supportsGraphics = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+        const bool supportsGraphics = static_cast<bool>(qfp.queueFamilyProperties.queueFlags & vk::QueueFlagBits::eGraphics);
         const bool supportsSurface = physicalDevice_.getSurfaceSupportKHR(static_cast<uint32_t>(index), *surface_);
 
         return supportsGraphics && supportsSurface;
@@ -280,11 +280,12 @@ void VkRenderer::CreateLogicalDevice() {
 }
 
 void VkRenderer::CreateSwapChain() {
-    const auto surfaceCapabilities = physicalDevice_.getSurfaceCapabilitiesKHR(*surface_);
+    vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{.surface = surface_};
+    const auto surfaceCapabilities = physicalDevice_.getSurfaceCapabilities2KHR(surfaceInfo).surfaceCapabilities;
     swapChainExtent_ = ChooseSwapExtent(surfaceCapabilities);
     const uint32_t minImageCount = ChooseSwapMinImageCount(surfaceCapabilities);
 
-    const std::vector availableFormats = physicalDevice_.getSurfaceFormatsKHR(*surface_);
+    const std::vector availableFormats = physicalDevice_.getSurfaceFormats2KHR(surfaceInfo);
     swapChainSurfaceFormat_ = ChooseSwapSurfaceFormat(availableFormats);
 
     const std::vector availablePresentModes = physicalDevice_.getSurfacePresentModesKHR(*surface_);
@@ -293,8 +294,8 @@ void VkRenderer::CreateSwapChain() {
     const vk::SwapchainCreateInfoKHR swapChainCreateInfo{
         .surface = *surface_,
         .minImageCount = minImageCount,
-        .imageFormat = swapChainSurfaceFormat_.format,
-        .imageColorSpace = swapChainSurfaceFormat_.colorSpace,
+        .imageFormat = swapChainSurfaceFormat_.surfaceFormat.format,
+        .imageColorSpace = swapChainSurfaceFormat_.surfaceFormat.colorSpace,
         .imageExtent = swapChainExtent_,
         .imageArrayLayers = 1,
         .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
@@ -319,9 +320,9 @@ void VkRenderer::RecreateSwapChain() {
     std::cout << "Recreated SwapChain" << std::endl;
 }
 
-vk::SurfaceFormatKHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const& availableFormats) {
+vk::SurfaceFormat2KHR VkRenderer::ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormat2KHR> const& availableFormats) {
     const auto formatIt = std::ranges::find_if(availableFormats, [](const auto& format) {
-        return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+        return format.surfaceFormat.format == vk::Format::eB8G8R8A8Srgb && format.surfaceFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
     });
     return formatIt != availableFormats.end() ? *formatIt : availableFormats.front();
 }
@@ -372,7 +373,7 @@ void VkRenderer::CreateImageViews() {
     swapChainImageViews_.reserve(swapChainImages_.size());
 
     for (const auto& image : swapChainImages_) {
-        swapChainImageViews_.emplace_back(CreateImageView(image, swapChainSurfaceFormat_.format, vk::ImageAspectFlagBits::eColor));
+        swapChainImageViews_.emplace_back(CreateImageView(image, swapChainSurfaceFormat_.surfaceFormat.format, vk::ImageAspectFlagBits::eColor));
     }
 }
 
@@ -527,7 +528,7 @@ void VkRenderer::CreateGraphicsPipeline() {
         },
         {
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &swapChainSurfaceFormat_.format,
+            .pColorAttachmentFormats = &swapChainSurfaceFormat_.surfaceFormat.format,
             .depthAttachmentFormat = depthFormat
         }
     };
@@ -691,7 +692,7 @@ void VkRenderer::CreateTextureImage() {
 }
 
 void VkRenderer::CreateTextureSampler() {
-    vk::PhysicalDeviceProperties properties = physicalDevice_.getProperties();
+    vk::PhysicalDeviceProperties2 properties = physicalDevice_.getProperties2();
     vk::SamplerCreateInfo samplerCreateInfo{
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
@@ -701,7 +702,7 @@ void VkRenderer::CreateTextureSampler() {
         .addressModeW = vk::SamplerAddressMode::eRepeat,
         .mipLodBias = 0.0f,
         .anisotropyEnable = vk::True,
-        .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+        .maxAnisotropy = properties.properties.limits.maxSamplerAnisotropy,
         .compareEnable = vk::False,
         .compareOp = vk::CompareOp::eAlways
     };

@@ -121,8 +121,7 @@ struct PhysicalDeviceRequirements {
 
     static inline const std::vector<const char*> extensions = {
         vk::KHRSwapchainExtensionName,
-        vk::EXTExtendedDynamicStateExtensionName,
-        vk::KHRMaintenance5ExtensionName
+        vk::KHRGetSurfaceCapabilities2ExtensionName
     };
 
     static constexpr auto queueFlagBits{
@@ -163,7 +162,7 @@ private:
     void CreateSwapChain();
     void RecreateSwapChain();
 
-    static vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats);
+    static vk::SurfaceFormat2KHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormat2KHR> const& availableFormats);
     static vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
     static vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
     static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
@@ -234,7 +233,7 @@ private:
 
     vk::raii::SwapchainKHR swapChain_{nullptr};
     std::vector<vk::Image> swapChainImages_;
-    vk::SurfaceFormatKHR swapChainSurfaceFormat_;
+    vk::SurfaceFormat2KHR swapChainSurfaceFormat_;
     vk::Extent2D swapChainExtent_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
 
