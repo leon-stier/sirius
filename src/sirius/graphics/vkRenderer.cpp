@@ -8,7 +8,22 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 
+// Helper functions to be able to define physical device requirements once and then check and use them with one call where needed
 namespace {
+bool SupportsCoreFeatures(const vk::PhysicalDeviceFeatures& required, const vk::PhysicalDeviceFeatures& queried) {
+    constexpr size_t count = sizeof(vk::PhysicalDeviceFeatures) / sizeof(vk::Bool32);
+
+    const auto reqFlags = std::span(reinterpret_cast<const vk::Bool32*>(&required), count);
+    const auto queriedFlags = std::span(reinterpret_cast<const vk::Bool32*>(&queried), count);
+
+    for (size_t i = 0; i < count; ++i) {
+        if (reqFlags[i] == vk::True && queriedFlags[i] != vk::True) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template<typename T>
 bool SupportsAllRequiredFeatures(const T& required, const T& queried) {
     constexpr size_t headerSize = sizeof(vk::StructureType) + sizeof(void*);
@@ -48,7 +63,6 @@ void SetupFeatureChain(Tuple& tuple) {
 // 4. Automated dynamic features check
 template<typename Tuple, std::size_t... Is>
 auto QueryFeaturesChain(const vk::raii::PhysicalDevice& device, std::index_sequence<Is...>) {
-    // Unpacks tuple element types: device.getFeatures2<T0, T1, T2...>()
     return device.getFeatures2<
         vk::PhysicalDeviceFeatures2,
         std::tuple_element_t<Is, Tuple>...
@@ -56,16 +70,24 @@ auto QueryFeaturesChain(const vk::raii::PhysicalDevice& device, std::index_seque
 }
 
 template<typename Tuple>
-bool CheckTupleFeatures(const vk::raii::PhysicalDevice& device, const Tuple& requiredTuple) {
-    // 1. Query the device using the types inside requiredTuple
+bool CheckTupleFeatures(
+    const vk::raii::PhysicalDevice& device,
+    const vk::PhysicalDeviceFeatures& requiredCoreFeatures,
+    const Tuple& requiredTuple
+) {
+    // 1. Query the device (vk::PhysicalDeviceFeatures2 is automatically the head of chain)
     auto chain = QueryFeaturesChain<Tuple>(
         device,
         std::make_index_sequence<std::tuple_size_v<Tuple>>{}
     );
 
-    // 2. Validate every required feature struct against what getFeatures2 returned
+    // 2. Validate core Vulkan 1.0 features
+    if (!SupportsCoreFeatures(requiredCoreFeatures, chain.get<vk::PhysicalDeviceFeatures2>().features)) {
+        return false;
+    }
+
+    // 3. Validate extension features
     return std::apply([&]<typename... T0>(const T0&... reqStructs) {
-        // chain.get<T>() retrieves the queried structure for type T from the returned chain
         return (SupportsAllRequiredFeatures(reqStructs, chain.template get<std::decay_t<T0>>()) && ...);
     }, requiredTuple);
 }
@@ -84,7 +106,8 @@ void VkRenderer::Init() {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateDepthResources();
-    // CreateTextureImage();
+    CreateTextureImage();
+    CreateTextureSampler();
     LoadModel();
     CreateVertexBuffer();
     CreateIndexBuffer();
@@ -204,7 +227,7 @@ bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice
     }))
         return false; // Return early if extensions are not supported
 
-    return CheckTupleFeatures(physicalDevice, Req::requiredFeatures);
+    return CheckTupleFeatures(physicalDevice, Req::requiredCoreFeatures, Req::requiredFeatures);
 }
 
 void VkRenderer::CreateLogicalDevice() {
@@ -237,8 +260,11 @@ void VkRenderer::CreateLogicalDevice() {
     auto featuresChain = PhysicalDeviceRequirements::requiredFeatures;
     SetupFeatureChain(featuresChain);
 
-    vk::PhysicalDeviceFeatures2 deviceFeatures;
-    deviceFeatures.pNext = &std::get<0>(featuresChain);
+
+    vk::PhysicalDeviceFeatures2 deviceFeatures{
+        .pNext = &std::get<0>(featuresChain),
+        .features = PhysicalDeviceRequirements::requiredCoreFeatures
+    };
 
 
     vk::DeviceCreateInfo deviceCreateInfo{
@@ -368,15 +394,26 @@ vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
-    vk::DescriptorSetLayoutBinding uboLayoutBinding{
-        .binding = 0,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex
+    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{
+        {
+            {
+                .binding = 0,
+                .descriptorType = vk::DescriptorType::eUniformBuffer,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eVertex
+            },
+            {
+                .binding = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment
+            }
+        }
     };
+
     vk::DescriptorSetLayoutCreateInfo layoutCreateInfo{
-        .bindingCount = 1,
-        .pBindings = &uboLayoutBinding
+        .bindingCount = 2,
+        .pBindings = bindings.data()
     };
     descriptorSetLayout_ = vk::raii::DescriptorSetLayout(device_, layoutCreateInfo);
 }
@@ -597,7 +634,7 @@ void VkRenderer::CreateSyncObjects() {
 
 void VkRenderer::CreateTextureImage() {
     int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load("../../resources/statue.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    stbi_uc* pixels = stbi_load("../../resources/viking_room.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
     if (!pixels) {
@@ -622,33 +659,54 @@ void VkRenderer::CreateTextureImage() {
     );
 
     vk::raii::CommandBuffer commandBuffer = BeginSingleTimeCommands();
-    // TransitionImageLayout(
-    //     textureImage_,
-    //     commandBuffer,
-    //     vk::ImageLayout::eUndefined,
-    //     vk::ImageLayout::eTransferDstOptimal,
-    //     {},
-    //     vk::AccessFlagBits2::eTransferWrite,
-    //     vk::PipelineStageFlagBits2::eTopOfPipe,
-    //     vk::PipelineStageFlagBits2::eTransfer,
-    //     vk::ImageAspectFlagBits::eColor
-    // );
-    //
-    // CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
-    //
-    // TransitionImageLayout(
-    //     textureImage_,
-    //     commandBuffer,
-    //     vk::ImageLayout::eTransferDstOptimal,
-    //     vk::ImageLayout::eShaderReadOnlyOptimal,
-    //     vk::AccessFlagBits2::eTransferWrite,
-    //     vk::AccessFlagBits2::eShaderRead,
-    //     vk::PipelineStageFlagBits2::eTransfer,
-    //     vk::PipelineStageFlagBits2::eFragmentShader,
-    //     vk::ImageAspectFlagBits::eColor
-    // );
+    TransitionImageLayout(
+        textureImage_,
+        commandBuffer,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal,
+        {},
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::ImageAspectFlagBits::eColor
+    );
+
+    CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
+
+    TransitionImageLayout(
+        textureImage_,
+        commandBuffer,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::AccessFlagBits2::eShaderRead,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eColor
+    );
 
     EndSingleTimeCommands(std::move(commandBuffer));
+
+    textureImageView_ = CreateImageView(*textureImage_, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+}
+
+void VkRenderer::CreateTextureSampler() {
+    vk::PhysicalDeviceProperties properties = physicalDevice_.getProperties();
+    vk::SamplerCreateInfo samplerCreateInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = vk::True,
+        .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+        .compareEnable = vk::False,
+        .compareOp = vk::CompareOp::eAlways
+    };
+
+    textureSampler_ = vk::raii::Sampler(device_, samplerCreateInfo);
 }
 
 void VkRenderer::CreateVertexBuffer() {
@@ -690,21 +748,29 @@ void VkRenderer::CreateUniformBuffers() {
 }
 
 void VkRenderer::CreateDescriptorPool() {
-    vk::DescriptorPoolSize poolSize{
-        .type = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = kMaxFramesInFlight
+    std::array<vk::DescriptorPoolSize, 2> poolSizes{
+        {
+            {
+                .type = vk::DescriptorType::eUniformBuffer,
+                .descriptorCount = kMaxFramesInFlight
+            },
+            {
+                .type = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = kMaxFramesInFlight
+            }
+        }
     };
     vk::DescriptorPoolCreateInfo poolCreateInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets = kMaxFramesInFlight,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
+        .poolSizeCount = poolSizes.size(),
+        .pPoolSizes = poolSizes.data()
     };
     descriptorPool_ = vk::raii::DescriptorPool(device_, poolCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSets() {
-    std::vector<vk::DescriptorSetLayout> layouts(kMaxFramesInFlight, *descriptorSetLayout_);
+    std::vector layouts(kMaxFramesInFlight, *descriptorSetLayout_);
     vk::DescriptorSetAllocateInfo allocInfo{
         .descriptorPool = descriptorPool_,
         .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
@@ -721,13 +787,31 @@ void VkRenderer::CreateDescriptorSets() {
             .offset = 0,
             .range = sizeof(UniformBufferObject)
         };
-        vk::WriteDescriptorSet descriptorWrite{
-            .dstSet = frame.descriptorSet,
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eUniformBuffer,
-            .pBufferInfo = &bufferInfo
+        vk::DescriptorImageInfo imageInfo{
+            .sampler = textureSampler_,
+            .imageView = textureImageView_,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+        };
+
+        std::array<vk::WriteDescriptorSet, 2> descriptorWrite{
+            {
+                {
+                    .dstSet = frame.descriptorSet,
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eUniformBuffer,
+                    .pBufferInfo = &bufferInfo
+                },
+                {
+                    .dstSet = frame.descriptorSet,
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .pImageInfo = &imageInfo
+                }
+            }
         };
         device_.updateDescriptorSets(descriptorWrite, {});
     }
@@ -770,6 +854,10 @@ void VkRenderer::LoadModel() {
                 attrib.vertices[3 * index.vertex_index + 0],
                 attrib.vertices[3 * index.vertex_index + 1],
                 attrib.vertices[3 * index.vertex_index + 2]
+            };
+            vertex.texCoord = {
+                attrib.texcoords.at(2 * index.texcoord_index + 0),
+                1.0f - attrib.texcoords.at(2 * index.texcoord_index + 1)
             };
             vertex.color = {1.0f, 1.0f, 1.0f};
 

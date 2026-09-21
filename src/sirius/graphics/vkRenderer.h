@@ -60,6 +60,7 @@ struct Vertex
 {
     glm::vec3 pos;
     glm::vec3 color;
+    glm::vec2 texCoord;
 
     static vk::VertexInputBindingDescription GetBindingDescription()
     {
@@ -70,7 +71,7 @@ struct Vertex
         };
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescriptions()
+    static std::array<vk::VertexInputAttributeDescription, 3> GetAttributeDescriptions()
     {
         return {{
             {
@@ -85,7 +86,12 @@ struct Vertex
             .format = vk::Format::eR32G32B32Sfloat,
             .offset = offsetof(Vertex, color)
             },
-        }};
+        {
+            .location = 2,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = offsetof(Vertex, texCoord)
+        }}};
     }
 };
 
@@ -121,6 +127,10 @@ struct PhysicalDeviceRequirements {
 
     static constexpr auto queueFlagBits{
         vk::QueueFlagBits::eGraphics
+    };
+
+    static constexpr vk::PhysicalDeviceFeatures requiredCoreFeatures{
+        .samplerAnisotropy = vk::True
     };
 
     static constexpr auto requiredFeatures = std::make_tuple(
@@ -169,6 +179,7 @@ private:
     void CreateDepthResources();
     void CreateSyncObjects();
     void CreateTextureImage();
+    void CreateTextureSampler();
     void CreateVertexBuffer();
     void CreateIndexBuffer();
     void CreateUniformBuffers();
@@ -234,6 +245,8 @@ private:
 
     vk::raii::Image textureImage_{nullptr};
     vk::raii::DeviceMemory textureImageMemory_{nullptr};
+    vk::raii::ImageView textureImageView_{nullptr};
+    vk::raii::Sampler textureSampler_{nullptr};
     
     vk::raii::Image depthImage_{nullptr};
     vk::raii::DeviceMemory depthImageMemory_{nullptr};
