@@ -10,11 +10,11 @@
 
 // Helper functions to be able to define physical device requirements once and then check and use them with one call where needed
 namespace {
-bool SupportsCoreFeatures(const vk::PhysicalDeviceFeatures& required, const vk::PhysicalDeviceFeatures& queried) {
-    constexpr size_t count = sizeof(vk::PhysicalDeviceFeatures) / sizeof(vk::Bool32);
+bool SupportsCoreFeatures(const vk::PhysicalDeviceFeatures2& required, const vk::PhysicalDeviceFeatures2& queried) {
+    constexpr size_t count = sizeof(vk::PhysicalDeviceFeatures2) / sizeof(vk::Bool32);
 
-    const auto reqFlags = std::span(reinterpret_cast<const vk::Bool32*>(&required), count);
-    const auto queriedFlags = std::span(reinterpret_cast<const vk::Bool32*>(&queried), count);
+    const auto reqFlags = std::span(reinterpret_cast<const vk::Bool32*>(&required.features), count);
+    const auto queriedFlags = std::span(reinterpret_cast<const vk::Bool32*>(&queried.features), count);
 
     for (size_t i = 0; i < count; ++i) {
         if (reqFlags[i] == vk::True && queriedFlags[i] != vk::True) {
@@ -72,7 +72,7 @@ auto QueryFeaturesChain(const vk::raii::PhysicalDevice& device, std::index_seque
 template<typename Tuple>
 bool CheckTupleFeatures(
     const vk::raii::PhysicalDevice& device,
-    const vk::PhysicalDeviceFeatures& requiredCoreFeatures,
+    const vk::PhysicalDeviceFeatures2& requiredCoreFeatures,
     const Tuple& requiredTuple
 ) {
     // 1. Query the device (vk::PhysicalDeviceFeatures2 is automatically the head of chain)
@@ -82,7 +82,7 @@ bool CheckTupleFeatures(
     );
 
     // 2. Validate core Vulkan 1.0 features
-    if (!SupportsCoreFeatures(requiredCoreFeatures, chain.get<vk::PhysicalDeviceFeatures2>().features)) {
+    if (!SupportsCoreFeatures(requiredCoreFeatures, chain.template get<vk::PhysicalDeviceFeatures2>())) {
         return false;
     }
 
@@ -96,7 +96,7 @@ bool CheckTupleFeatures(
 namespace sirius {
 void VkRenderer::Init() {
     CreateInstance();
-    SetupDebugMessenger();
+    // SetupDebugMessenger();
     CreateSurface();
     PickPhysicalDevice();
     CreateLogicalDevice();
@@ -154,7 +154,8 @@ void VkRenderer::CreateInstance() {
     std::vector requiredExtensions = {
         vk::KHRSurfaceExtensionName,
         vk::KHRWin32SurfaceExtensionName,
-        vk::EXTDebugUtilsExtensionName
+        vk::EXTDebugUtilsExtensionName,
+        vk::KHRGetSurfaceCapabilities2ExtensionName
     };
     if (kEnableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
 
@@ -263,7 +264,7 @@ void VkRenderer::CreateLogicalDevice() {
 
     vk::PhysicalDeviceFeatures2 deviceFeatures{
         .pNext = &std::get<0>(featuresChain),
-        .features = PhysicalDeviceRequirements::requiredCoreFeatures
+        .features = PhysicalDeviceRequirements::requiredCoreFeatures.features
     };
 
 
@@ -589,11 +590,11 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
 
 vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candidates, const vk::ImageTiling tiling, const vk::FormatFeatureFlags features) const {
     for (const auto format : candidates) {
-        vk::FormatProperties props = physicalDevice_.getFormatProperties(format);
+        vk::FormatProperties2 props = physicalDevice_.getFormatProperties2(format);
 
         if ((
-                tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) ||
-            (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features)) {
+                tiling == vk::ImageTiling::eLinear && (props.formatProperties.linearTilingFeatures & features) == features) ||
+            (tiling == vk::ImageTiling::eOptimal && (props.formatProperties.optimalTilingFeatures & features) == features)) {
             return format;
         }
     }
@@ -1039,7 +1040,6 @@ void VkRenderer::DoDraw() {
         .commandBuffer = *frames_.at(currentFrameIndex).commandBuffer
     };
 
-    // 2. Modern SubmitInfo2
     const vk::SubmitInfo2 submitInfo{
         .waitSemaphoreInfoCount = 1,
         .pWaitSemaphoreInfos = &imageAcquireWaitInfo,
@@ -1049,7 +1049,6 @@ void VkRenderer::DoDraw() {
         .pSignalSemaphoreInfos = semaphoreSignals.data()
     };
 
-    // 3. Modern Queue Submit
     graphicsQueue_.submit2(submitInfo, nullptr);
 
     const vk::PresentInfoKHR presentInfoKHR{
@@ -1118,6 +1117,13 @@ void VkRenderer::SetupDebugMessenger() {
 
 vk::Bool32 VkRenderer::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, const vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
     std::cerr << "Validation Error of type " << to_string(type) << ". msg: " << pCallbackData->pMessage << std::endl;
+    if (pCallbackData->messageIdNumber == 0xde900250) { // WARNING-legacy-gpdp2
+// #if defined(_MSC_VER)
+//         __debugbreak(); // Forces Visual Studio / CLion debugger to pause here
+// #else
+//         __builtin_trap(); // Forces Clang / GCC debugger to pause here
+// #endif
+    }
 
     return vk::False;
 }
@@ -1170,10 +1176,10 @@ void VkRenderer::TransitionImageLayout(
  * So only a type that's suitable (bit set to 1) and fits our required properties is selected
  */
 uint32_t VkRenderer::FindMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
-    const vk::PhysicalDeviceMemoryProperties memoryProperties{physicalDevice_.getMemoryProperties()};
+    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{physicalDevice_.getMemoryProperties2()};
 
-    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
-        if (typeFilter & (1 << i) && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+    for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
+        if (typeFilter & (1 << i) && (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
             return i;
         }
     }
@@ -1222,12 +1228,16 @@ vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
 void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const {
     commandBuffer.end();
 
-    const vk::SubmitInfo submitInfo{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &*commandBuffer
+    const vk::CommandBufferSubmitInfo commandBufferSubmitInfo{
+        .commandBuffer = *commandBuffer
     };
 
-    graphicsQueue_.submit(submitInfo, nullptr);
+    const vk::SubmitInfo2 submitInfo{
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &commandBufferSubmitInfo
+    };
+
+    graphicsQueue_.submit2(submitInfo, nullptr);
     graphicsQueue_.waitIdle();
 }
 }

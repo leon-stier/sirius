@@ -119,17 +119,17 @@ struct FrameContext {
 struct PhysicalDeviceRequirements {
     static constexpr uint32_t minApiVersion = vk::ApiVersion14;
 
+    // Only device extensions. Instance extensions are directly in CreateInstance()
     static inline const std::vector<const char*> extensions = {
         vk::KHRSwapchainExtensionName,
-        vk::KHRGetSurfaceCapabilities2ExtensionName
     };
 
     static constexpr auto queueFlagBits{
         vk::QueueFlagBits::eGraphics
     };
 
-    static constexpr vk::PhysicalDeviceFeatures requiredCoreFeatures{
-        .samplerAnisotropy = vk::True
+    static constexpr vk::PhysicalDeviceFeatures2 requiredCoreFeatures{
+        .features = {.samplerAnisotropy = vk::True}
     };
 
     static constexpr auto requiredFeatures = std::make_tuple(
