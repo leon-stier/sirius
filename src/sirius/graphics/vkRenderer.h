@@ -5,26 +5,18 @@
 
 #include <tiny_obj_loader.h>
 
+#include "vulkanContext.h"
 
-import vulkan;
 #include <vulkan/vk_platform.h>
 
+
+
+class VulkanContext;
 
 namespace sirius {
 struct InputEvent;
 
-const std::vector kValidationLayers = {
-    "VK_LAYER_KHRONOS_validation",
-};
-
 constexpr uint32_t kMaxFramesInFlight{2};
-
-
-#ifdef NDEBUG
-constexpr bool kEnableValidationLayers = false;
-#else
-constexpr bool kEnableValidationLayers = true;
-#endif
 
 
 template<class... Ts>
@@ -220,8 +212,10 @@ private:
     vk::raii::CommandBuffer BeginSingleTimeCommands() const;
     void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
+
+    std::unique_ptr<VulkanContext> context_;
     // Declaration order dictates cleanup order
-    vk::raii::Context context_;
+    // vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
     vk::raii::DebugUtilsMessengerEXT debugMessenger_{nullptr};
     vk::raii::SurfaceKHR surface_{nullptr};

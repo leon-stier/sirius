@@ -4,6 +4,8 @@ add_library(graphics STATIC
         renderer.cpp
         vkRenderer.h
         vkRenderer.cpp
+        vulkanContext.cpp
+        vulkanContext.h
 )
 
 target_link_libraries(graphics
