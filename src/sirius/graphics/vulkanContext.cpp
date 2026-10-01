@@ -1,11 +1,8 @@
-//
-// Created by Leon on 30/09/2026.
-//
-
 #include "vulkanContext.h"
 
+#include <iostream>
+#include <ranges>
 #include <stdexcept>
-
 #include "window/wndProc.h"
 
 const std::vector kValidationLayers = {
@@ -107,7 +104,8 @@ bool CheckTupleFeatures(
 }
 }
 
-VulkanContext::VulkanContext() {
+void VulkanContext::Init() {
+
 }
 
 vk::raii::Instance& VulkanContext::Instance() {
@@ -126,8 +124,12 @@ vk::raii::Queue& VulkanContext::GraphicsQueue() {
     return graphicsQueue_;
 }
 
-glm::uint32_t VulkanContext::GraphicsQueueFamily() const {
-    return graphicsQueueFamily_;
+glm::uint32_t VulkanContext::GraphicsQueueIndex() const {
+    return graphicsQueueIndex_;
+}
+
+vk::raii::SurfaceKHR& VulkanContext::Surface() {
+    return surface_;
 }
 
 void VulkanContext::CreateInstance() {

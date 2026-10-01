@@ -1,6 +1,8 @@
 #pragma once
 
 
+class VulkanContext;
+
 namespace sirius {
 class VkRenderer;
 
@@ -11,5 +13,6 @@ public:
     static void Draw();
 private:
     static VkRenderer vkRenderer_;
+    static VulkanContext vulkanContext_;
 };
 }

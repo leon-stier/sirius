@@ -4,6 +4,7 @@
 #include "window/wndProc.h"
 
 #define STB_IMAGE_IMPLEMENTATION
+#include <ranges>
 #include <stb_image.h>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -11,9 +12,8 @@
 
 
 namespace sirius {
-void VkRenderer::Init() {
-    // SetupDebugMessenger();
-    context_ = std::make_unique<VulkanContext>();
+void VkRenderer::Init(VulkanContext& context) {
+    context_ = &context;
     CreateSwapChain();
     CreateImageViews();
     CreateDescriptorSetLayout();
@@ -52,40 +52,20 @@ void VkRenderer::Draw() {
     }
 }
 
-void VkRenderer::CreateInstance() {
-
-}
-
-void VkRenderer::CreateSurface() {
-
-}
-
-void VkRenderer::PickPhysicalDevice() {
-
-}
-
-bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
-
-}
-
-void VkRenderer::CreateLogicalDevice() {
-
-}
-
 void VkRenderer::CreateSwapChain() {
-    vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{.surface = surface_};
-    const auto surfaceCapabilities = physicalDevice_.getSurfaceCapabilities2KHR(surfaceInfo).surfaceCapabilities;
+    vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{.surface = context_->Surface()};
+    const auto surfaceCapabilities = context_->PhysicalDevice().getSurfaceCapabilities2KHR(surfaceInfo).surfaceCapabilities;
     swapChainExtent_ = ChooseSwapExtent(surfaceCapabilities);
     const uint32_t minImageCount = ChooseSwapMinImageCount(surfaceCapabilities);
 
-    const std::vector availableFormats = physicalDevice_.getSurfaceFormats2KHR(surfaceInfo);
+    const std::vector availableFormats = context_->PhysicalDevice().getSurfaceFormats2KHR(surfaceInfo);
     swapChainSurfaceFormat_ = ChooseSwapSurfaceFormat(availableFormats);
 
-    const std::vector availablePresentModes = physicalDevice_.getSurfacePresentModesKHR(*surface_);
+    const std::vector availablePresentModes = context_->PhysicalDevice().getSurfacePresentModesKHR(*context_->Surface());
     const vk::PresentModeKHR presentMode = ChooseSwapPresentMode(availablePresentModes);
 
     const vk::SwapchainCreateInfoKHR swapChainCreateInfo{
-        .surface = *surface_,
+        .surface = *context_->Surface(),
         .minImageCount = minImageCount,
         .imageFormat = swapChainSurfaceFormat_.surfaceFormat.format,
         .imageColorSpace = swapChainSurfaceFormat_.surfaceFormat.colorSpace,
@@ -99,12 +79,12 @@ void VkRenderer::CreateSwapChain() {
         .clipped = true
     };
 
-    swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
+    swapChain_ = vk::raii::SwapchainKHR(context_->Device(), swapChainCreateInfo);
     swapChainImages_ = swapChain_.getImages();
 }
 
 void VkRenderer::RecreateSwapChain() {
-    device_.waitIdle();
+    context_->Device().waitIdle();
     swapChainImageViews_.clear();
     swapChain_ = nullptr;
     CreateSwapChain();
@@ -184,7 +164,7 @@ vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk
         }
     };
 
-    return vk::raii::ImageView(device_, viewCreateInfo);
+    return vk::raii::ImageView(context_->Device(), viewCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
@@ -209,7 +189,7 @@ void VkRenderer::CreateDescriptorSetLayout() {
         .bindingCount = 2,
         .pBindings = bindings.data()
     };
-    descriptorSetLayout_ = vk::raii::DescriptorSetLayout(device_, layoutCreateInfo);
+    descriptorSetLayout_ = vk::raii::DescriptorSetLayout(context_->Device(), layoutCreateInfo);
 }
 
 void VkRenderer::CreateGraphicsPipeline() {
@@ -302,7 +282,7 @@ void VkRenderer::CreateGraphicsPipeline() {
         .pSetLayouts = &*descriptorSetLayout_,
         .pushConstantRangeCount = 0
     };
-    pipelineLayout_ = vk::raii::PipelineLayout(device_, pipelineLayoutCreateInfo);
+    pipelineLayout_ = vk::raii::PipelineLayout(context_->Device(), pipelineLayoutCreateInfo);
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
         {
@@ -326,16 +306,16 @@ void VkRenderer::CreateGraphicsPipeline() {
         }
     };
 
-    graphicsPipeline_ = vk::raii::Pipeline(device_, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+    graphicsPipeline_ = vk::raii::Pipeline(context_->Device(), nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 }
 
 void VkRenderer::InitCommandBuffers() {
     for (FrameContext& frame : frames_) {
         const vk::CommandPoolCreateInfo poolCreateInfo{
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = graphicsQueueIndex_
+            .queueFamilyIndex = context_->GraphicsQueueIndex()
         };
-        frame.commandPool = vk::raii::CommandPool(device_, poolCreateInfo);
+        frame.commandPool = vk::raii::CommandPool(context_->Device(), poolCreateInfo);
 
         const vk::CommandBufferAllocateInfo allocInfo{
             .commandPool = frame.commandPool,
@@ -343,15 +323,15 @@ void VkRenderer::InitCommandBuffers() {
             .commandBufferCount = 1
         };
 
-        frame.commandBuffer = std::move(vk::raii::CommandBuffers(device_, allocInfo).front());
+        frame.commandBuffer = std::move(vk::raii::CommandBuffers(context_->Device(), allocInfo).front());
     }
 
     const vk::CommandPoolCreateInfo poolCreateInfo{
         .flags = vk::CommandPoolCreateFlagBits::eTransient,
-        .queueFamilyIndex = graphicsQueueIndex_
+        .queueFamilyIndex = context_->GraphicsQueueIndex()
     };
 
-    ephemeralCommandPool_ = vk::raii::CommandPool(device_, poolCreateInfo);
+    ephemeralCommandPool_ = vk::raii::CommandPool(context_->Device(), poolCreateInfo);
 }
 
 std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const uint32_t width, const uint32_t height, const vk::Format format, const vk::ImageTiling tiling, const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties) const {
@@ -367,14 +347,14 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
         .sharingMode = vk::SharingMode::eExclusive
     };
 
-    auto image = vk::raii::Image(device_, imageInfo);
+    auto image = vk::raii::Image(context_->Device(), imageInfo);
 
     const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
     const vk::MemoryAllocateInfo allocInfo{
         .allocationSize = memRequirements.size,
         .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
     };
-    auto imageMemory = vk::raii::DeviceMemory(device_, allocInfo);
+    auto imageMemory = vk::raii::DeviceMemory(context_->Device(), allocInfo);
     image.bindMemory(imageMemory, 0);
 
     return {std::move(image), std::move(imageMemory)};
@@ -382,7 +362,7 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
 
 vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candidates, const vk::ImageTiling tiling, const vk::FormatFeatureFlags features) const {
     for (const auto format : candidates) {
-        vk::FormatProperties2 props = physicalDevice_.getFormatProperties2(format);
+        vk::FormatProperties2 props = context_->PhysicalDevice().getFormatProperties2(format);
 
         if ((
                 tiling == vk::ImageTiling::eLinear && (props.formatProperties.linearTilingFeatures & features) == features) ||
@@ -415,14 +395,14 @@ void VkRenderer::CreateSyncObjects() {
         .sType = vk::StructureType::eSemaphoreCreateInfo,
         .pNext = &semaphoreTypeCreateInfo
     };
-    timelineSemaphore_ = vk::raii::Semaphore(device_, timelineSemaphoreCreateInfo);
+    timelineSemaphore_ = vk::raii::Semaphore(context_->Device(), timelineSemaphoreCreateInfo);
 
     for (FrameContext& frame : frames_) {
-        frame.imageAcquiredSemaphore = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+        frame.imageAcquiredSemaphore = vk::raii::Semaphore(context_->Device(), vk::SemaphoreCreateInfo());
     }
 
     for (size_t i = 0; i < swapChainImages_.size(); i++) {
-        renderCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+        renderCompleteSemaphores_.emplace_back(context_->Device(), vk::SemaphoreCreateInfo());
     }
 }
 
@@ -485,7 +465,7 @@ void VkRenderer::CreateTextureImage() {
 }
 
 void VkRenderer::CreateTextureSampler() {
-    vk::PhysicalDeviceProperties2 properties = physicalDevice_.getProperties2();
+    vk::PhysicalDeviceProperties2 properties = context_->PhysicalDevice().getProperties2();
     vk::SamplerCreateInfo samplerCreateInfo{
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
@@ -500,7 +480,7 @@ void VkRenderer::CreateTextureSampler() {
         .compareOp = vk::CompareOp::eAlways
     };
 
-    textureSampler_ = vk::raii::Sampler(device_, samplerCreateInfo);
+    textureSampler_ = vk::raii::Sampler(context_->Device(), samplerCreateInfo);
 }
 
 void VkRenderer::CreateVertexBuffer() {
@@ -560,7 +540,7 @@ void VkRenderer::CreateDescriptorPool() {
         .poolSizeCount = poolSizes.size(),
         .pPoolSizes = poolSizes.data()
     };
-    descriptorPool_ = vk::raii::DescriptorPool(device_, poolCreateInfo);
+    descriptorPool_ = vk::raii::DescriptorPool(context_->Device(), poolCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSets() {
@@ -571,7 +551,7 @@ void VkRenderer::CreateDescriptorSets() {
         .pSetLayouts = layouts.data()
     };
 
-    for (auto&& [frame, set] : std::views::zip(frames_, device_.allocateDescriptorSets(allocInfo))) {
+    for (auto&& [frame, set] : std::views::zip(frames_, context_->Device().allocateDescriptorSets(allocInfo))) {
         frame.descriptorSet = std::move(set);
     }
 
@@ -607,7 +587,7 @@ void VkRenderer::CreateDescriptorSets() {
                 }
             }
         };
-        device_.updateDescriptorSets(descriptorWrite, {});
+        context_->Device().updateDescriptorSets(descriptorWrite, {});
     }
 }
 
@@ -617,14 +597,14 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(con
         .usage = bufferUsage,
         .sharingMode = vk::SharingMode::eExclusive
     };
-    auto buffer = vk::raii::Buffer(device_, bufferInfo);
+    auto buffer = vk::raii::Buffer(context_->Device(), bufferInfo);
 
     const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
     const vk::MemoryAllocateInfo memoryAllocateInfo{
         .allocationSize = memRequirements.size,
         .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, memoryProperties)
     };
-    auto bufferMemory{vk::raii::DeviceMemory(device_, memoryAllocateInfo)};
+    auto bufferMemory{vk::raii::DeviceMemory(context_->Device(), memoryAllocateInfo)};
     buffer.bindMemory(bufferMemory, 0);
 
     return {std::move(buffer), std::move(bufferMemory)};
@@ -786,7 +766,7 @@ void VkRenderer::DoDraw() {
         .pSemaphores = &semHandle,
         .pValues = &waitValue
     };
-    const vk::Result waitResult{device_.waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max())};
+    const vk::Result waitResult{context_->Device().waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max())};
     if (waitResult != vk::Result::eSuccess) {
         // Handle unexpected results (e.g., eTimeout or device loss)
         throw std::runtime_error("Failed or timed out waiting for timeline semaphore!");
@@ -841,7 +821,7 @@ void VkRenderer::DoDraw() {
         .pSignalSemaphoreInfos = semaphoreSignals.data()
     };
 
-    graphicsQueue_.submit2(submitInfo, nullptr);
+    context_->GraphicsQueue().submit2(submitInfo, nullptr);
 
     const vk::PresentInfoKHR presentInfoKHR{
         .waitSemaphoreCount = 1,
@@ -851,7 +831,7 @@ void VkRenderer::DoDraw() {
         .pImageIndices = &imageIndex
     };
 
-    const vk::Result presentResult = graphicsQueue_.presentKHR(presentInfoKHR);
+    const vk::Result presentResult = context_->GraphicsQueue().presentKHR(presentInfoKHR);
 
     switch (presentResult) {
         case vk::Result::eSuccess:
@@ -894,11 +874,6 @@ void VkRenderer::ProcessCameraEvent(const InputEvent event) {
                    }
                }, event.data);
 }
-
-void VkRenderer::SetupDebugMessenger() {
-
-}
-
 
 
 void VkRenderer::TransitionImageLayout(
@@ -949,7 +924,7 @@ void VkRenderer::TransitionImageLayout(
  * So only a type that's suitable (bit set to 1) and fits our required properties is selected
  */
 uint32_t VkRenderer::FindMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
-    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{physicalDevice_.getMemoryProperties2()};
+    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{context_->PhysicalDevice().getMemoryProperties2()};
 
     for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
         if (typeFilter & (1 << i) && (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
@@ -989,7 +964,7 @@ vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
         .level = vk::CommandBufferLevel::ePrimary,
         .commandBufferCount = 1,
     };
-    vk::raii::CommandBuffer commandBuffer = std::move(device_.allocateCommandBuffers(allocateInfo).front());
+    vk::raii::CommandBuffer commandBuffer = std::move(context_->Device().allocateCommandBuffers(allocateInfo).front());
 
     commandBuffer.begin({
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
@@ -1010,7 +985,7 @@ void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) 
         .pCommandBufferInfos = &commandBufferSubmitInfo
     };
 
-    graphicsQueue_.submit2(submitInfo, nullptr);
-    graphicsQueue_.waitIdle();
+    context_->GraphicsQueue().submit2(submitInfo, nullptr);
+    context_->GraphicsQueue().waitIdle();
 }
 }

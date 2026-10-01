@@ -1,13 +1,16 @@
 #pragma once
 #include "input/input_manager.h"
+#include "vulkanContext.h"
+
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
+#include <fstream>
+#include <filesystem>
 #include <tiny_obj_loader.h>
 
-#include "vulkanContext.h"
-
 #include <vulkan/vk_platform.h>
+
 
 
 
@@ -136,21 +139,12 @@ struct PhysicalDeviceRequirements {
 
 class VkRenderer {
 public:
-    void Init();
+    void Init(VulkanContext& context);
     void Draw();
 
-    ~VkRenderer() {
-        device_.waitIdle();
-    }
 
 private:
     //////// Initialization ////////
-    void CreateInstance();
-    void CreateSurface();
-    void PickPhysicalDevice();
-
-    static bool IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice);
-    void CreateLogicalDevice();
     void CreateSwapChain();
     void RecreateSwapChain();
 
@@ -189,9 +183,6 @@ private:
     void ProcessCameraEvent(InputEvent event);
 
     //////////// Utils ////////////
-    void SetupDebugMessenger();
-    static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT * pCallbackData, void * pUserData);
-
     void TransitionImageLayout(
         vk::Image image,
         const vk::raii::CommandBuffer& commandBuffer,
@@ -213,17 +204,8 @@ private:
     void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
 
-    std::unique_ptr<VulkanContext> context_;
+    VulkanContext* context_{nullptr};
     // Declaration order dictates cleanup order
-    // vk::raii::Context context_;
-    vk::raii::Instance instance_{nullptr};
-    vk::raii::DebugUtilsMessengerEXT debugMessenger_{nullptr};
-    vk::raii::SurfaceKHR surface_{nullptr};
-
-    vk::raii::PhysicalDevice physicalDevice_{nullptr};
-    vk::raii::Device device_{nullptr};
-    vk::raii::Queue graphicsQueue_{nullptr};
-    uint32_t graphicsQueueIndex_{0};
 
     vk::raii::SwapchainKHR swapChain_{nullptr};
     std::vector<vk::Image> swapChainImages_;

@@ -2,8 +2,7 @@
 
 #include <glm/fwd.hpp>
 
-
-import vulkan;
+#include "vulkan/vulkan_raii.hpp"
 
 
 struct PhysicalDeviceRequirements {
@@ -34,9 +33,10 @@ struct PhysicalDeviceRequirements {
 
 class VulkanContext {
 public:
-    VulkanContext();
-
-    ~VulkanContext() = default;
+    ~VulkanContext() {
+        device_.waitIdle();
+    }
+    void Init();
 
     vk::raii::Instance& Instance();
 
@@ -46,13 +46,16 @@ public:
 
     vk::raii::Queue& GraphicsQueue();
 
-    glm::uint32_t GraphicsQueueFamily() const;
+    glm::uint32_t GraphicsQueueIndex() const;
+
+    vk::raii::SurfaceKHR& Surface();
 
 private:
     void CreateInstance();
 
     void SetupDebugMessenger();
-    vk::Bool32 VulkanContext::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
+
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
 
     void CreateSurface();
 
@@ -72,5 +75,4 @@ private:
 
     vk::raii::Queue graphicsQueue_{nullptr};
     uint32_t graphicsQueueIndex_{0};
-    uint32_t graphicsQueueFamily_{0};
 };
