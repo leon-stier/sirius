@@ -105,7 +105,10 @@ bool CheckTupleFeatures(
 }
 
 void VulkanContext::Init() {
-
+    CreateInstance();
+    CreateSurface();
+    PickPhysicalDevice();
+    CreateLogicalDevice();
 }
 
 vk::raii::Instance& VulkanContext::Instance() {

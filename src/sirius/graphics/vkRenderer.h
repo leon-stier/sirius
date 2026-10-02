@@ -102,8 +102,8 @@ struct FrameContext {
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
 
-    vk::raii::Buffer uniformBuffer{nullptr};
     vk::raii::DeviceMemory uniformBufferMemory{nullptr};
+    vk::raii::Buffer uniformBuffer{nullptr};
     void* uniformBufferMapped{nullptr};
 
     vk::raii::DescriptorSet descriptorSet{nullptr};
@@ -111,37 +111,16 @@ struct FrameContext {
     vk::raii::Semaphore imageAcquiredSemaphore{nullptr};
 };
 
-struct PhysicalDeviceRequirements {
-    static constexpr uint32_t minApiVersion = vk::ApiVersion14;
-
-    // Only device extensions. Instance extensions are directly in CreateInstance()
-    static inline const std::vector<const char*> extensions = {
-        vk::KHRSwapchainExtensionName,
-    };
-
-    static constexpr auto queueFlagBits{
-        vk::QueueFlagBits::eGraphics
-    };
-
-    static constexpr vk::PhysicalDeviceFeatures2 requiredCoreFeatures{
-        .features = {.samplerAnisotropy = vk::True}
-    };
-
-    static constexpr auto requiredFeatures = std::make_tuple(
-        vk::PhysicalDeviceVulkan11Features{ .shaderDrawParameters = vk::True },
-        vk::PhysicalDeviceVulkan12Features{ .timelineSemaphore = vk::True},
-        vk::PhysicalDeviceVulkan13Features{ .synchronization2 = vk::True, .dynamicRendering = vk::True },
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{ .extendedDynamicState = vk::True },
-        vk::PhysicalDeviceMaintenance5FeaturesKHR{ .maintenance5 = vk::True }
-    );
-};
-
-
 class VkRenderer {
 public:
     void Init(VulkanContext& context);
     void Draw();
 
+    ~VkRenderer() {
+        if (context_ != nullptr) {
+            context_->Device().waitIdle();
+        }
+    }
 
 private:
     //////// Initialization ////////
@@ -205,8 +184,8 @@ private:
 
 
     VulkanContext* context_{nullptr};
-    // Declaration order dictates cleanup order
-
+    // Members are declared before the objects that depend on them so reverse
+    // declaration-order destruction releases Vulkan dependencies first.
     vk::raii::SwapchainKHR swapChain_{nullptr};
     std::vector<vk::Image> swapChainImages_;
     vk::SurfaceFormat2KHR swapChainSurfaceFormat_;
@@ -218,21 +197,21 @@ private:
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
 
-    vk::raii::Image textureImage_{nullptr};
     vk::raii::DeviceMemory textureImageMemory_{nullptr};
+    vk::raii::Image textureImage_{nullptr};
     vk::raii::ImageView textureImageView_{nullptr};
     vk::raii::Sampler textureSampler_{nullptr};
     
-    vk::raii::Image depthImage_{nullptr};
     vk::raii::DeviceMemory depthImageMemory_{nullptr};
+    vk::raii::Image depthImage_{nullptr};
     vk::raii::ImageView depthImageView_{nullptr};
 
     std::vector<Vertex> vertices_;
     std::vector<uint32_t> indices_;
-    vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
-    vk::raii::Buffer indexBuffer_{nullptr};
+    vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory indexBufferMemory_{nullptr};
+    vk::raii::Buffer indexBuffer_{nullptr};
     std::array<FrameContext, kMaxFramesInFlight> frames_;
 
     vk::raii::CommandPool ephemeralCommandPool_{nullptr};

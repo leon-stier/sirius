@@ -12,7 +12,7 @@ public:
 
     static void Draw();
 private:
-    static VkRenderer vkRenderer_;
     static VulkanContext vulkanContext_;
+    static VkRenderer vkRenderer_;
 };
 }

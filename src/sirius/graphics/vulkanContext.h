@@ -34,8 +34,11 @@ struct PhysicalDeviceRequirements {
 class VulkanContext {
 public:
     ~VulkanContext() {
-        device_.waitIdle();
+        if (*device_) {
+            device_.waitIdle();
+        }
     }
+
     void Init();
 
     vk::raii::Instance& Instance();
