@@ -4,102 +4,16 @@
 #include "window/wndProc.h"
 
 #define STB_IMAGE_IMPLEMENTATION
+#include <ranges>
 #include <stb_image.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 
-// Helper functions to be able to define physical device requirements once and then check and use them with one call where needed
-namespace {
-bool SupportsCoreFeatures(const vk::PhysicalDeviceFeatures2& required, const vk::PhysicalDeviceFeatures2& queried) {
-    constexpr size_t count = sizeof(vk::PhysicalDeviceFeatures2) / sizeof(vk::Bool32);
 
-    const auto reqFlags = std::span(reinterpret_cast<const vk::Bool32*>(&required.features), count);
-    const auto queriedFlags = std::span(reinterpret_cast<const vk::Bool32*>(&queried.features), count);
-
-    for (size_t i = 0; i < count; ++i) {
-        if (reqFlags[i] == vk::True && queriedFlags[i] != vk::True) {
-            return false;
-        }
-    }
-    return true;
-}
-
-template<typename T>
-bool SupportsAllRequiredFeatures(const T& required, const T& queried) {
-    constexpr size_t headerSize = sizeof(vk::StructureType) + sizeof(void*);
-
-    const auto reqFlags = std::span(
-        reinterpret_cast<const vk::Bool32*>(reinterpret_cast<const char*>(&required) + headerSize),
-        (sizeof(T) - headerSize) / sizeof(vk::Bool32)
-    );
-
-    const auto queriedFlags = std::span(
-        reinterpret_cast<const vk::Bool32*>(reinterpret_cast<const char*>(&queried) + headerSize),
-        (sizeof(T) - headerSize) / sizeof(vk::Bool32)
-    );
-
-    for (size_t i = 0; i < reqFlags.size(); ++i) {
-        if (reqFlags[i] == vk::True && queriedFlags[i] != vk::True) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// 3. Helper to chain pNext pointers in a std::tuple
-template<typename Tuple, std::size_t... Is>
-void ChainPNext(Tuple& tuple, std::index_sequence<Is...>) {
-    ((std::get<Is>(tuple).pNext = &std::get<Is + 1>(tuple)), ...);
-}
-
-template<typename Tuple>
-void SetupFeatureChain(Tuple& tuple) {
-    constexpr auto size = std::tuple_size_v<Tuple>;
-    if constexpr (size > 1) {
-        ChainPNext(tuple, std::make_index_sequence<size - 1>{});
-    }
-}
-
-// 4. Automated dynamic features check
-template<typename Tuple, std::size_t... Is>
-auto QueryFeaturesChain(const vk::raii::PhysicalDevice& device, std::index_sequence<Is...>) {
-    return device.getFeatures2<
-        vk::PhysicalDeviceFeatures2,
-        std::tuple_element_t<Is, Tuple>...
-    >();
-}
-
-template<typename Tuple>
-bool CheckTupleFeatures(
-    const vk::raii::PhysicalDevice& device,
-    const vk::PhysicalDeviceFeatures2& requiredCoreFeatures,
-    const Tuple& requiredTuple
-) {
-    // 1. Query the device (vk::PhysicalDeviceFeatures2 is automatically the head of chain)
-    auto chain = QueryFeaturesChain<Tuple>(
-        device,
-        std::make_index_sequence<std::tuple_size_v<Tuple>>{}
-    );
-
-    // 2. Validate core Vulkan 1.0 features
-    if (!SupportsCoreFeatures(requiredCoreFeatures, chain.template get<vk::PhysicalDeviceFeatures2>())) {
-        return false;
-    }
-
-    // 3. Validate extension features
-    return std::apply([&]<typename... T0>(const T0&... reqStructs) {
-        return (SupportsAllRequiredFeatures(reqStructs, chain.template get<std::decay_t<T0>>()) && ...);
-    }, requiredTuple);
-}
-}
 
 namespace sirius {
-void VkRenderer::Init() {
-    CreateInstance();
-    // SetupDebugMessenger();
-    CreateSurface();
-    PickPhysicalDevice();
-    CreateLogicalDevice();
+void VkRenderer::Init(VulkanContext& context) {
+    context_ = &context;
     CreateSwapChain();
     CreateImageViews();
     CreateDescriptorSetLayout();
@@ -138,162 +52,20 @@ void VkRenderer::Draw() {
     }
 }
 
-void VkRenderer::CreateInstance() {
-    constexpr vk::ApplicationInfo appInfo{
-        .pApplicationName = "Hello World",
-        .applicationVersion = vk::makeVersion(0, 1, 0),
-        .pEngineName = "Sirius",
-        .engineVersion = vk::makeVersion(1, 0, 0),
-        .apiVersion = PhysicalDeviceRequirements::minApiVersion
-    };
-
-    vk::InstanceCreateInfo instanceCreateInfo{
-        .pApplicationInfo = &appInfo
-    };
-
-    std::vector requiredExtensions = {
-        vk::KHRSurfaceExtensionName,
-        vk::KHRWin32SurfaceExtensionName,
-        vk::EXTDebugUtilsExtensionName,
-        vk::KHRGetSurfaceCapabilities2ExtensionName
-    };
-    if (kEnableValidationLayers) requiredExtensions.push_back(vk::EXTDebugUtilsExtensionName);
-
-    instanceCreateInfo.enabledExtensionCount = requiredExtensions.size();
-    instanceCreateInfo.ppEnabledExtensionNames = requiredExtensions.data();
-
-    // Get validation layers
-    std::vector<char const*> requiredLayers;
-    if (kEnableValidationLayers) {
-        requiredLayers.assign(kValidationLayers.begin(), kValidationLayers.end());
-    }
-
-    // Verify layer support & throw directly if any layer is missing
-    auto layerProperties = context_.enumerateInstanceLayerProperties();
-
-    if (const auto it = std::ranges::find_if_not(requiredLayers, [&layerProperties](const std::string_view required) {
-        return std::ranges::contains(layerProperties, required, [](const auto& prop) {
-            return std::string_view(prop.layerName);
-        });
-    }); it != requiredLayers.end()) {
-        throw std::runtime_error(std::format("Required layer not supported: {}", *it));
-    }
-
-    instanceCreateInfo.enabledLayerCount = static_cast<uint32_t>(requiredLayers.size());
-    instanceCreateInfo.ppEnabledLayerNames = requiredLayers.data();
-
-    instance_ = vk::raii::Instance(context_, instanceCreateInfo);
-}
-
-void VkRenderer::CreateSurface() {
-    const vk::Win32SurfaceCreateInfoKHR surfaceCreateInfo{
-        .hinstance = hInstance,
-        .hwnd = hwndMain
-    };
-
-    surface_ = instance_.createWin32SurfaceKHR(surfaceCreateInfo);
-}
-
-void VkRenderer::PickPhysicalDevice() {
-    auto physicalDevices = instance_.enumeratePhysicalDevices();
-    if (physicalDevices.empty()) throw std::runtime_error("Failed to find GPUs with Vulkan support!");
-
-    // Get the first device that satisfies the conditions
-    if (const auto devIter = std::ranges::find_if(physicalDevices, [this](const auto& dev) { return IsDeviceSuitable(dev); }); devIter != physicalDevices.end()) {
-        physicalDevice_ = *devIter;
-    } else {
-        throw std::runtime_error("Failed to find a suitable GPU!");
-    }
-}
-
-bool VkRenderer::IsDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
-    using Req = PhysicalDeviceRequirements;
-    // 1. API version check
-    if (physicalDevice.getProperties2().properties.apiVersion < Req::minApiVersion) return false;
-
-
-    // 2. Queue family check
-    auto queueFamilies = physicalDevice.getQueueFamilyProperties2();
-    if (!std::ranges::any_of(queueFamilies, [](const auto& qfp) {
-        return static_cast<bool>(qfp.queueFamilyProperties.queueFlags & Req::queueFlagBits);
-    }))
-        return false; // Return early if queues are not supported
-
-    // 3. Extension check
-    auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-    if (!std::ranges::all_of(Req::extensions, [&](const std::string_view required) {
-        return std::ranges::contains(availableExtensions, required, [](const auto& ext) {
-            return std::string_view(ext.extensionName);
-        });
-    }))
-        return false; // Return early if extensions are not supported
-
-    return CheckTupleFeatures(physicalDevice, Req::requiredCoreFeatures, Req::requiredFeatures);
-}
-
-void VkRenderer::CreateLogicalDevice() {
-    std::vector queueFamilyProperties = physicalDevice_.getQueueFamilyProperties2();
-
-    auto enumeratedProperties = queueFamilyProperties | std::views::enumerate;
-
-    const auto it = std::ranges::find_if(enumeratedProperties, [this](const auto& tuple) {
-        auto [index, qfp] = tuple;
-
-        const bool supportsGraphics = static_cast<bool>(qfp.queueFamilyProperties.queueFlags & vk::QueueFlagBits::eGraphics);
-        const bool supportsSurface = physicalDevice_.getSurfaceSupportKHR(static_cast<uint32_t>(index), *surface_);
-
-        return supportsGraphics && supportsSurface;
-    });
-
-    if (it == enumeratedProperties.end()) {
-        throw std::runtime_error("Failed to find a queue family supporting graphics and presentation!");
-    }
-
-    graphicsQueueIndex_ = static_cast<uint32_t>(std::get<0>(*it));
-
-    float queuePriority = 0.5f;
-    vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-        .queueFamilyIndex = graphicsQueueIndex_,
-        .queueCount = 1,
-        .pQueuePriorities = &queuePriority
-    };
-
-    auto featuresChain = PhysicalDeviceRequirements::requiredFeatures;
-    SetupFeatureChain(featuresChain);
-
-
-    vk::PhysicalDeviceFeatures2 deviceFeatures{
-        .pNext = &std::get<0>(featuresChain),
-        .features = PhysicalDeviceRequirements::requiredCoreFeatures.features
-    };
-
-
-    vk::DeviceCreateInfo deviceCreateInfo{
-        .pNext = &deviceFeatures,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &deviceQueueCreateInfo,
-        .enabledExtensionCount = static_cast<uint32_t>(PhysicalDeviceRequirements::extensions.size()),
-        .ppEnabledExtensionNames = PhysicalDeviceRequirements::extensions.data()
-    };
-
-    device_ = vk::raii::Device(physicalDevice_, deviceCreateInfo);
-    graphicsQueue_ = vk::raii::Queue(device_, graphicsQueueIndex_, 0);
-}
-
 void VkRenderer::CreateSwapChain() {
-    vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{.surface = surface_};
-    const auto surfaceCapabilities = physicalDevice_.getSurfaceCapabilities2KHR(surfaceInfo).surfaceCapabilities;
+    vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{.surface = context_->Surface()};
+    const auto surfaceCapabilities = context_->PhysicalDevice().getSurfaceCapabilities2KHR(surfaceInfo).surfaceCapabilities;
     swapChainExtent_ = ChooseSwapExtent(surfaceCapabilities);
     const uint32_t minImageCount = ChooseSwapMinImageCount(surfaceCapabilities);
 
-    const std::vector availableFormats = physicalDevice_.getSurfaceFormats2KHR(surfaceInfo);
+    const std::vector availableFormats = context_->PhysicalDevice().getSurfaceFormats2KHR(surfaceInfo);
     swapChainSurfaceFormat_ = ChooseSwapSurfaceFormat(availableFormats);
 
-    const std::vector availablePresentModes = physicalDevice_.getSurfacePresentModesKHR(*surface_);
+    const std::vector availablePresentModes = context_->PhysicalDevice().getSurfacePresentModesKHR(*context_->Surface());
     const vk::PresentModeKHR presentMode = ChooseSwapPresentMode(availablePresentModes);
 
     const vk::SwapchainCreateInfoKHR swapChainCreateInfo{
-        .surface = *surface_,
+        .surface = *context_->Surface(),
         .minImageCount = minImageCount,
         .imageFormat = swapChainSurfaceFormat_.surfaceFormat.format,
         .imageColorSpace = swapChainSurfaceFormat_.surfaceFormat.colorSpace,
@@ -307,12 +79,12 @@ void VkRenderer::CreateSwapChain() {
         .clipped = true
     };
 
-    swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
+    swapChain_ = vk::raii::SwapchainKHR(context_->Device(), swapChainCreateInfo);
     swapChainImages_ = swapChain_.getImages();
 }
 
 void VkRenderer::RecreateSwapChain() {
-    device_.waitIdle();
+    context_->Device().waitIdle();
     swapChainImageViews_.clear();
     swapChain_ = nullptr;
     CreateSwapChain();
@@ -392,7 +164,7 @@ vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk
         }
     };
 
-    return vk::raii::ImageView(device_, viewCreateInfo);
+    return vk::raii::ImageView(context_->Device(), viewCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
@@ -417,7 +189,7 @@ void VkRenderer::CreateDescriptorSetLayout() {
         .bindingCount = 2,
         .pBindings = bindings.data()
     };
-    descriptorSetLayout_ = vk::raii::DescriptorSetLayout(device_, layoutCreateInfo);
+    descriptorSetLayout_ = vk::raii::DescriptorSetLayout(context_->Device(), layoutCreateInfo);
 }
 
 void VkRenderer::CreateGraphicsPipeline() {
@@ -510,7 +282,7 @@ void VkRenderer::CreateGraphicsPipeline() {
         .pSetLayouts = &*descriptorSetLayout_,
         .pushConstantRangeCount = 0
     };
-    pipelineLayout_ = vk::raii::PipelineLayout(device_, pipelineLayoutCreateInfo);
+    pipelineLayout_ = vk::raii::PipelineLayout(context_->Device(), pipelineLayoutCreateInfo);
 
     vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
         {
@@ -534,16 +306,16 @@ void VkRenderer::CreateGraphicsPipeline() {
         }
     };
 
-    graphicsPipeline_ = vk::raii::Pipeline(device_, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+    graphicsPipeline_ = vk::raii::Pipeline(context_->Device(), nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 }
 
 void VkRenderer::InitCommandBuffers() {
     for (FrameContext& frame : frames_) {
         const vk::CommandPoolCreateInfo poolCreateInfo{
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = graphicsQueueIndex_
+            .queueFamilyIndex = context_->GraphicsQueueIndex()
         };
-        frame.commandPool = vk::raii::CommandPool(device_, poolCreateInfo);
+        frame.commandPool = vk::raii::CommandPool(context_->Device(), poolCreateInfo);
 
         const vk::CommandBufferAllocateInfo allocInfo{
             .commandPool = frame.commandPool,
@@ -551,15 +323,15 @@ void VkRenderer::InitCommandBuffers() {
             .commandBufferCount = 1
         };
 
-        frame.commandBuffer = std::move(vk::raii::CommandBuffers(device_, allocInfo).front());
+        frame.commandBuffer = std::move(vk::raii::CommandBuffers(context_->Device(), allocInfo).front());
     }
 
     const vk::CommandPoolCreateInfo poolCreateInfo{
         .flags = vk::CommandPoolCreateFlagBits::eTransient,
-        .queueFamilyIndex = graphicsQueueIndex_
+        .queueFamilyIndex = context_->GraphicsQueueIndex()
     };
 
-    ephemeralCommandPool_ = vk::raii::CommandPool(device_, poolCreateInfo);
+    ephemeralCommandPool_ = vk::raii::CommandPool(context_->Device(), poolCreateInfo);
 }
 
 std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const uint32_t width, const uint32_t height, const vk::Format format, const vk::ImageTiling tiling, const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties) const {
@@ -575,14 +347,14 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
         .sharingMode = vk::SharingMode::eExclusive
     };
 
-    auto image = vk::raii::Image(device_, imageInfo);
+    auto image = vk::raii::Image(context_->Device(), imageInfo);
 
     const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
     const vk::MemoryAllocateInfo allocInfo{
         .allocationSize = memRequirements.size,
         .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
     };
-    auto imageMemory = vk::raii::DeviceMemory(device_, allocInfo);
+    auto imageMemory = vk::raii::DeviceMemory(context_->Device(), allocInfo);
     image.bindMemory(imageMemory, 0);
 
     return {std::move(image), std::move(imageMemory)};
@@ -590,7 +362,7 @@ std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const
 
 vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candidates, const vk::ImageTiling tiling, const vk::FormatFeatureFlags features) const {
     for (const auto format : candidates) {
-        vk::FormatProperties2 props = physicalDevice_.getFormatProperties2(format);
+        vk::FormatProperties2 props = context_->PhysicalDevice().getFormatProperties2(format);
 
         if ((
                 tiling == vk::ImageTiling::eLinear && (props.formatProperties.linearTilingFeatures & features) == features) ||
@@ -623,14 +395,14 @@ void VkRenderer::CreateSyncObjects() {
         .sType = vk::StructureType::eSemaphoreCreateInfo,
         .pNext = &semaphoreTypeCreateInfo
     };
-    timelineSemaphore_ = vk::raii::Semaphore(device_, timelineSemaphoreCreateInfo);
+    timelineSemaphore_ = vk::raii::Semaphore(context_->Device(), timelineSemaphoreCreateInfo);
 
     for (FrameContext& frame : frames_) {
-        frame.imageAcquiredSemaphore = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+        frame.imageAcquiredSemaphore = vk::raii::Semaphore(context_->Device(), vk::SemaphoreCreateInfo());
     }
 
     for (size_t i = 0; i < swapChainImages_.size(); i++) {
-        renderCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+        renderCompleteSemaphores_.emplace_back(context_->Device(), vk::SemaphoreCreateInfo());
     }
 }
 
@@ -693,7 +465,7 @@ void VkRenderer::CreateTextureImage() {
 }
 
 void VkRenderer::CreateTextureSampler() {
-    vk::PhysicalDeviceProperties2 properties = physicalDevice_.getProperties2();
+    vk::PhysicalDeviceProperties2 properties = context_->PhysicalDevice().getProperties2();
     vk::SamplerCreateInfo samplerCreateInfo{
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
@@ -708,7 +480,7 @@ void VkRenderer::CreateTextureSampler() {
         .compareOp = vk::CompareOp::eAlways
     };
 
-    textureSampler_ = vk::raii::Sampler(device_, samplerCreateInfo);
+    textureSampler_ = vk::raii::Sampler(context_->Device(), samplerCreateInfo);
 }
 
 void VkRenderer::CreateVertexBuffer() {
@@ -768,7 +540,7 @@ void VkRenderer::CreateDescriptorPool() {
         .poolSizeCount = poolSizes.size(),
         .pPoolSizes = poolSizes.data()
     };
-    descriptorPool_ = vk::raii::DescriptorPool(device_, poolCreateInfo);
+    descriptorPool_ = vk::raii::DescriptorPool(context_->Device(), poolCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSets() {
@@ -779,7 +551,7 @@ void VkRenderer::CreateDescriptorSets() {
         .pSetLayouts = layouts.data()
     };
 
-    for (auto&& [frame, set] : std::views::zip(frames_, device_.allocateDescriptorSets(allocInfo))) {
+    for (auto&& [frame, set] : std::views::zip(frames_, context_->Device().allocateDescriptorSets(allocInfo))) {
         frame.descriptorSet = std::move(set);
     }
 
@@ -815,7 +587,7 @@ void VkRenderer::CreateDescriptorSets() {
                 }
             }
         };
-        device_.updateDescriptorSets(descriptorWrite, {});
+        context_->Device().updateDescriptorSets(descriptorWrite, {});
     }
 }
 
@@ -825,14 +597,14 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(con
         .usage = bufferUsage,
         .sharingMode = vk::SharingMode::eExclusive
     };
-    auto buffer = vk::raii::Buffer(device_, bufferInfo);
+    auto buffer = vk::raii::Buffer(context_->Device(), bufferInfo);
 
     const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
     const vk::MemoryAllocateInfo memoryAllocateInfo{
         .allocationSize = memRequirements.size,
         .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, memoryProperties)
     };
-    auto bufferMemory{vk::raii::DeviceMemory(device_, memoryAllocateInfo)};
+    auto bufferMemory{vk::raii::DeviceMemory(context_->Device(), memoryAllocateInfo)};
     buffer.bindMemory(bufferMemory, 0);
 
     return {std::move(buffer), std::move(bufferMemory)};
@@ -994,7 +766,7 @@ void VkRenderer::DoDraw() {
         .pSemaphores = &semHandle,
         .pValues = &waitValue
     };
-    const vk::Result waitResult{device_.waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max())};
+    const vk::Result waitResult{context_->Device().waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max())};
     if (waitResult != vk::Result::eSuccess) {
         // Handle unexpected results (e.g., eTimeout or device loss)
         throw std::runtime_error("Failed or timed out waiting for timeline semaphore!");
@@ -1049,7 +821,7 @@ void VkRenderer::DoDraw() {
         .pSignalSemaphoreInfos = semaphoreSignals.data()
     };
 
-    graphicsQueue_.submit2(submitInfo, nullptr);
+    context_->GraphicsQueue().submit2(submitInfo, nullptr);
 
     const vk::PresentInfoKHR presentInfoKHR{
         .waitSemaphoreCount = 1,
@@ -1059,7 +831,7 @@ void VkRenderer::DoDraw() {
         .pImageIndices = &imageIndex
     };
 
-    const vk::Result presentResult = graphicsQueue_.presentKHR(presentInfoKHR);
+    const vk::Result presentResult = context_->GraphicsQueue().presentKHR(presentInfoKHR);
 
     switch (presentResult) {
         case vk::Result::eSuccess:
@@ -1103,30 +875,6 @@ void VkRenderer::ProcessCameraEvent(const InputEvent event) {
                }, event.data);
 }
 
-void VkRenderer::SetupDebugMessenger() {
-    if (!kEnableValidationLayers) return;
-    constexpr vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
-    constexpr vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
-    constexpr vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfo{
-        .messageSeverity = severityFlags,
-        .messageType = messageTypeFlags,
-        .pfnUserCallback = &DebugCallback
-    };
-    debugMessenger_ = instance_.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfo);
-}
-
-vk::Bool32 VkRenderer::DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, const vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-    std::cerr << "Validation Error of type " << to_string(type) << ". msg: " << pCallbackData->pMessage << std::endl;
-    if (pCallbackData->messageIdNumber == 0xde900250) { // WARNING-legacy-gpdp2
-// #if defined(_MSC_VER)
-//         __debugbreak(); // Forces Visual Studio / CLion debugger to pause here
-// #else
-//         __builtin_trap(); // Forces Clang / GCC debugger to pause here
-// #endif
-    }
-
-    return vk::False;
-}
 
 void VkRenderer::TransitionImageLayout(
     const vk::Image image,
@@ -1176,7 +924,7 @@ void VkRenderer::TransitionImageLayout(
  * So only a type that's suitable (bit set to 1) and fits our required properties is selected
  */
 uint32_t VkRenderer::FindMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
-    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{physicalDevice_.getMemoryProperties2()};
+    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{context_->PhysicalDevice().getMemoryProperties2()};
 
     for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
         if (typeFilter & (1 << i) && (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
@@ -1216,7 +964,7 @@ vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
         .level = vk::CommandBufferLevel::ePrimary,
         .commandBufferCount = 1,
     };
-    vk::raii::CommandBuffer commandBuffer = std::move(device_.allocateCommandBuffers(allocateInfo).front());
+    vk::raii::CommandBuffer commandBuffer = std::move(context_->Device().allocateCommandBuffers(allocateInfo).front());
 
     commandBuffer.begin({
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
@@ -1237,7 +985,7 @@ void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) 
         .pCommandBufferInfos = &commandBufferSubmitInfo
     };
 
-    graphicsQueue_.submit2(submitInfo, nullptr);
-    graphicsQueue_.waitIdle();
+    context_->GraphicsQueue().submit2(submitInfo, nullptr);
+    context_->GraphicsQueue().waitIdle();
 }
 }

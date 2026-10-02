@@ -4,10 +4,12 @@
 
 namespace sirius {
 
+VulkanContext Renderer::vulkanContext_;
 VkRenderer Renderer::vkRenderer_;
 
 void Renderer::Init() {
-    vkRenderer_. Init();
+    vulkanContext_.Init();
+    vkRenderer_.Init(vulkanContext_);
 }
 
 void Renderer::Draw() {
