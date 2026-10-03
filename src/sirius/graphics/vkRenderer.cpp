@@ -6,9 +6,10 @@
 
 #include <ktx.h>
 
-#define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
-#include "tiny_gltf.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define TINYGLTF_IMPLEMENTATION
+#include <tiny_gltf.h>
 
 namespace sirius {
 void VkRenderer::Init(VulkanContext& context) {
@@ -406,61 +407,42 @@ void VkRenderer::CreateSyncObjects() {
 }
 
 void VkRenderer::CreateTextureImage() {
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load("../../resources/viking_room.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
+    // Load KTX2 texture instead of using stb_image
+    ktxTexture* texture;
+    KTX_error_code result = ktxTexture_CreateFromNamedFile("../../resources/CesiumLogoFlat.ktx2", KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture);
 
-    if (!pixels) {
-        throw std::runtime_error("Failed to load texture image!");
+    if (result != KTX_SUCCESS) {
+        throw std::runtime_error("failed to load ktx texture image!");
     }
 
+    // Get texture dimensions and data
+    uint32_t texWidth = texture->baseWidth;
+    uint32_t texHeight = texture->baseHeight;
+    ktx_size_t imageSize = ktxTexture_GetImageSize(texture, 0);
+    ktx_uint8_t* ktxTextureData = ktxTexture_GetData(texture);
+
+    // Create staging buffer
     auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
+    // Copy texture data to staging buffer
     void* data = stagingBufferMemory.mapMemory(0, imageSize);
-    memcpy(data, pixels, imageSize);
+    memcpy(data, ktxTextureData, imageSize);
     stagingBufferMemory.unmapMemory();
 
-    stbi_image_free(pixels);
+    // Determine the Vulkan format from KTX format
+    vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb; // Default format, should be determined from KTX metadata
 
-    std::tie(textureImage_, textureImageMemory_) = CreateImage(
-        texWidth,
-        texHeight,
-        vk::Format::eR8G8B8A8Srgb,
-        vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-        vk::MemoryPropertyFlagBits::eDeviceLocal
-    );
+    // Create the texture image
+    std::tie(textureImage_, textureImageMemory_) = CreateImage(texWidth, texHeight, textureFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    vk::raii::CommandBuffer commandBuffer = BeginSingleTimeCommands();
-    TransitionImageLayout(
-        textureImage_,
-        commandBuffer,
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal,
-        {},
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor
-    );
-
+    // Copy data from staging buffer to texture image
+    auto commandBuffer = BeginSingleTimeCommands();
+    TransitionImageLayout(textureImage_, commandBuffer, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, {}, vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer, vk::ImageAspectFlagBits::eColor);
     CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
+    TransitionImageLayout(textureImage_, commandBuffer, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader, vk::ImageAspectFlagBits::eColor);
 
-    TransitionImageLayout(
-        textureImage_,
-        commandBuffer,
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::AccessFlagBits2::eTransferWrite,
-        vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::ImageAspectFlagBits::eColor
-    );
-
-    EndSingleTimeCommands(std::move(commandBuffer));
-
-    textureImageView_ = CreateImageView(*textureImage_, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+    // Cleanup KTX resources
+    ktxTexture_Destroy(texture);
 }
 
 void VkRenderer::CreateTextureSampler() {
@@ -614,7 +596,7 @@ void VkRenderer::LoadModel() {
     tinygltf::TinyGLTF loader;
     std::string warn, err;
 
-    const bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "../../resources/viking_room.obj");
+    const bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "../../resources/BoxTextured.gltf");
     if (!warn.empty()) {
         std::cout << "glTF warning: " << warn << std::endl;
     }
