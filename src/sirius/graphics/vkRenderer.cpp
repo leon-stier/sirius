@@ -1,15 +1,14 @@
-#define TINYOBJLOADER_IMPLEMENTATION
-
 #include "vkRenderer.h"
 #include "window/wndProc.h"
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <ranges>
-#include <stb_image.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <ktx.h>
 
-
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#include "tiny_gltf.h"
 
 namespace sirius {
 void VkRenderer::Init(VulkanContext& context) {
@@ -611,32 +610,129 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(con
 }
 
 void VkRenderer::LoadModel() {
-    tinyobj::attrib_t attrib;
-    std::vector<tinyobj::shape_t> shapes;
-    std::vector<tinyobj::material_t> materials;
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "../../resources/viking_room.obj")) {
-        throw std::runtime_error(warn + err);
+    const bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "../../resources/viking_room.obj");
+    if (!warn.empty()) {
+        std::cout << "glTF warning: " << warn << std::endl;
     }
 
-    for (const auto& shape : shapes) {
-        for (const auto& index : shape.mesh.indices) {
-            Vertex vertex{};
+    if (!err.empty()) {
+        std::cout << "glTF error: " << err << std::endl;
+    }
 
-            vertex.pos = {
-                attrib.vertices[3 * index.vertex_index + 0],
-                attrib.vertices[3 * index.vertex_index + 1],
-                attrib.vertices[3 * index.vertex_index + 2]
-            };
-            vertex.texCoord = {
-                attrib.texcoords.at(2 * index.texcoord_index + 0),
-                1.0f - attrib.texcoords.at(2 * index.texcoord_index + 1)
-            };
-            vertex.color = {1.0f, 1.0f, 1.0f};
+    if (!ret) {
+        throw std::runtime_error("Failed to load glTF model");
+    }
 
-            vertices_.push_back(vertex);
-            indices_.push_back(indices_.size());
+    vertices_.clear();
+    indices_.clear();
+
+    for (const auto& mesh : model.meshes) {
+        for (const auto& primitive : mesh.primitives) {
+            if (!primitive.attributes.contains("POSITION")) continue;
+
+            // Position Attribute
+            const tinygltf::Accessor& posAccessor = model.accessors[primitive.attributes.at("POSITION")];
+            const tinygltf::BufferView& posBufferView = model.bufferViews[posAccessor.bufferView];
+            const tinygltf::Buffer& posBuffer = model.buffers[posBufferView.buffer];
+            size_t posStride = posAccessor.ByteStride(posBufferView);
+
+            // TexCoord Attribute
+            bool hasTexCoords = primitive.attributes.contains("TEXCOORD_0");
+            const tinygltf::Accessor* texAccessor = hasTexCoords ? &model.accessors[primitive.attributes.at("TEXCOORD_0")] : nullptr;
+            const tinygltf::BufferView* texBufferView = hasTexCoords ? &model.bufferViews[texAccessor->bufferView] : nullptr;
+            const tinygltf::Buffer* texBuffer = hasTexCoords ? &model.buffers[texBufferView->buffer] : nullptr;
+            size_t texStride = hasTexCoords ? texAccessor->ByteStride(*texBufferView) : 0;
+
+            // Color Attribute
+            bool hasColors = primitive.attributes.contains("COLOR_0");
+            const tinygltf::Accessor* colorAccessor = hasColors ? &model.accessors[primitive.attributes.at("COLOR_0")] : nullptr;
+            const tinygltf::BufferView* colorBufferView = hasColors ? &model.bufferViews[colorAccessor->bufferView] : nullptr;
+            const tinygltf::Buffer* colorBuffer = hasColors ? &model.buffers[colorBufferView->buffer] : nullptr;
+            size_t colorStride = hasColors ? colorAccessor->ByteStride(*colorBufferView) : 0;
+
+            uint32_t baseVertex = static_cast<uint32_t>(vertices_.size());
+
+            // Parse Vertices
+            for (size_t i = 0; i < posAccessor.count; i++) {
+                Vertex vertex{};
+
+                // Position
+                const uint8_t* posData = &posBuffer.data[posBufferView.byteOffset + posAccessor.byteOffset + i * posStride];
+                const float* pos = reinterpret_cast<const float*>(posData);
+                vertex.pos = {pos[0], pos[1], pos[2]};
+
+                // UVs
+                if (hasTexCoords) {
+                    const uint8_t* texData = &texBuffer->data[texBufferView->byteOffset + texAccessor->byteOffset + i * texStride];
+                    const float* tex = reinterpret_cast<const float*>(texData);
+                    vertex.texCoord = {tex[0], tex[1]};
+                } else {
+                    vertex.texCoord = {0.0f, 0.0f};
+                }
+
+                // Vertex Colors
+                if (hasColors) {
+                    const uint8_t* colorData = &colorBuffer->data[colorBufferView->byteOffset + colorAccessor->byteOffset + i * colorStride];
+                    size_t compSize = tinygltf::GetComponentSizeInBytes(colorAccessor->componentType);
+
+                    auto readComp = [&](size_t idx) -> float {
+                        const uint8_t* ptr = colorData + idx * compSize;
+                        switch (colorAccessor->componentType) {
+                            case TINYGLTF_COMPONENT_TYPE_FLOAT:
+                                return *reinterpret_cast<const float*>(ptr);
+                            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                                return *ptr / 255.0f;
+                            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                                return *reinterpret_cast<const uint16_t*>(ptr) / 65535.0f;
+                            default:
+                                return 1.0f;
+                        }
+                    };
+
+                    vertex.color = {readComp(0), readComp(1), readComp(2)};
+                } else {
+                    vertex.color = {1.0f, 1.0f, 1.0f};
+                }
+
+                vertices_.push_back(vertex);
+            }
+
+            // Parse Indices (Handles both indexed and non-indexed geometry)
+            if (primitive.indices >= 0) {
+                const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
+                const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
+                const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+
+                const uint8_t* indexData = &indexBuffer.data[indexBufferView.byteOffset + indexAccessor.byteOffset];
+                size_t indexStride = indexAccessor.ByteStride(indexBufferView);
+
+                indices_.reserve(indices_.size() + indexAccessor.count);
+
+                for (size_t i = 0; i < indexAccessor.count; i++) {
+                    uint32_t index = 0;
+                    const uint8_t* ptr = indexData + i * indexStride;
+
+                    if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                        index = *reinterpret_cast<const uint16_t*>(ptr);
+                    } else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                        index = *reinterpret_cast<const uint32_t*>(ptr);
+                    } else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                        index = *ptr;
+                    }
+
+                    indices_.push_back(baseVertex + index);
+                }
+            } else {
+                // Unindexed primitives: generate consecutive indices
+                indices_.reserve(indices_.size() + posAccessor.count);
+                for (size_t i = 0; i < posAccessor.count; i++) {
+                    indices_.push_back(baseVertex + static_cast<uint32_t>(i));
+                }
+            }
         }
     }
 }

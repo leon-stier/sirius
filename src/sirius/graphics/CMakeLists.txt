@@ -11,7 +11,7 @@ add_library(graphics STATIC
 target_link_libraries(graphics
         PUBLIC
             Vulkan::Vulkan
-            glm::glm
+            KTX::ktx
 )
 
 target_include_directories(graphics PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)

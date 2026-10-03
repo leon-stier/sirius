@@ -5,7 +5,14 @@
     "name" : "tinyobjloader"
   }, {
     "name" : "stb"
+  }, {
+    "name" : "tinygltf",
+    "version>=" : "3.0.0#1"
+  }, {
+    "name" : "ktx",
+    "version>=" : "4.4.2"
   } ],
   "name" : "sirius",
-  "version-string" : "0.0.1"
+  "version-string" : "0.0.1",
+  "builtin-baseline" : "e6f9e70a29a3e80a1fc510d8503304315447112f"
 }

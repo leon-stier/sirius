@@ -7,7 +7,6 @@
 
 #include <fstream>
 #include <filesystem>
-#include <tiny_obj_loader.h>
 
 #include <vulkan/vk_platform.h>
 
