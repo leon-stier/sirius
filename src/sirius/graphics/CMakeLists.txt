@@ -1,5 +1,7 @@
 # Graphics static library
 add_library(graphics STATIC
+        camera.h
+        camera.cpp
         renderer.h
         renderer.cpp
         vkRenderer.h

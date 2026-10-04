@@ -1,17 +1,14 @@
 #pragma once
-#include "input/input_manager.h"
-#include "vulkanContext.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
 #include <fstream>
 #include <filesystem>
-
 #include <vulkan/vk_platform.h>
 
-
-
+#include "graphics/camera.h"
+#include "vulkanContext.h"
 
 class VulkanContext;
 
@@ -20,11 +17,6 @@ struct InputEvent;
 
 constexpr uint32_t kMaxFramesInFlight{2};
 
-
-template<class... Ts>
-struct Overload : Ts...{
-    using Ts::operator()...;
-};
 
 static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     if (!std::filesystem::exists(filePath)) {
@@ -50,14 +42,12 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     return buffer;
 }
 
-struct Vertex
-{
+struct Vertex {
     glm::vec3 pos;
     glm::vec3 color;
     glm::vec2 texCoord;
 
-    static vk::VertexInputBindingDescription GetBindingDescription()
-    {
+    static vk::VertexInputBindingDescription GetBindingDescription() {
         return {
             .binding = 0,
             .stride = sizeof(Vertex),
@@ -65,33 +55,34 @@ struct Vertex
         };
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 3> GetAttributeDescriptions()
-    {
-        return {{
+    static std::array<vk::VertexInputAttributeDescription, 3> GetAttributeDescriptions() {
+        return {
             {
-                .location = 0,
-                .binding = 0,
-                .format = vk::Format::eR32G32B32Sfloat,
-                .offset = offsetof(Vertex, pos)
-            },
-        {
-            .location = 1,
-            .binding = 0,
-            .format = vk::Format::eR32G32B32Sfloat,
-            .offset = offsetof(Vertex, color)
-            },
-        {
-            .location = 2,
-            .binding = 0,
-            .format = vk::Format::eR32G32Sfloat,
-            .offset = offsetof(Vertex, texCoord)
-        }}};
+                {
+                    .location = 0,
+                    .binding = 0,
+                    .format = vk::Format::eR32G32B32Sfloat,
+                    .offset = offsetof(Vertex, pos)
+                },
+                {
+                    .location = 1,
+                    .binding = 0,
+                    .format = vk::Format::eR32G32B32Sfloat,
+                    .offset = offsetof(Vertex, color)
+                },
+                {
+                    .location = 2,
+                    .binding = 0,
+                    .format = vk::Format::eR32G32Sfloat,
+                    .offset = offsetof(Vertex, texCoord)
+                }
+            }
+        };
     }
 };
 
 
-struct UniformBufferObject
-{
+struct UniformBufferObject {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 proj;
@@ -113,6 +104,7 @@ struct FrameContext {
 class VkRenderer {
 public:
     void Init(VulkanContext& context);
+
     void Draw();
 
     ~VkRenderer() {
@@ -124,30 +116,53 @@ public:
 private:
     //////// Initialization ////////
     void CreateSwapChain();
+
     void RecreateSwapChain();
 
     static vk::SurfaceFormat2KHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormat2KHR> const& availableFormats);
-    static vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
-    static vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
-    static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &capabilities);
+
+    static vk::PresentModeKHR ChooseSwapPresentMode(std::vector<vk::PresentModeKHR> const& availablePresentModes);
+
+    static vk::Extent2D ChooseSwapExtent(vk::SurfaceCapabilitiesKHR const& capabilities);
+
+    static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& capabilities);
 
     void CreateImageViews();
+
     vk::raii::ImageView CreateImageView(vk::Image const& image, vk::Format format, vk::ImageAspectFlags aspectFlags) const;
+
     void CreateDescriptorSetLayout();
+
     void CreateGraphicsPipeline();
+
     void InitCommandBuffers();
+
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const;
+
     vk::Format FindSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const;
+
     vk::Format FindDepthFormat() const;
+
     void CreateDepthResources();
+
     void CreateSyncObjects();
-    void CreateTextureImage();
+
+    void CreateTextureImage(const uint8_t* pixelData, uint32_t texWidth, uint32_t texHeight, vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb);
+
+    void KtxTextureLoader();
+
     void CreateTextureSampler();
+
     void CreateVertexBuffer();
+
     void CreateIndexBuffer();
+
     void CreateUniformBuffers();
+
     void CreateDescriptorPool();
+
     void CreateDescriptorSets();
+
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
 
     //////////// Scene ////////////
@@ -155,7 +170,9 @@ private:
 
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
-    void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex) const;
+
+    void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex);
+
     void DoDraw();
 
     void ProcessCameraEvent(InputEvent event);
@@ -175,12 +192,15 @@ private:
 
     uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
 
-    void CopyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer, vk::DeviceSize size) const;
-    void CopyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, const vk::raii::Buffer &buffer, const vk::raii::Image &image, uint32_t width, uint32_t height);
+    void CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) const;
+
+    void CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const vk::raii::Buffer& buffer, const vk::raii::Image& image, uint32_t width, uint32_t height);
 
     vk::raii::CommandBuffer BeginSingleTimeCommands() const;
+
     void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
+    static bool EqualsExt(const std::filesystem::path& p, std::string_view expected_ext);
 
     VulkanContext* context_{nullptr};
     // Members are declared before the objects that depend on them so reverse
@@ -200,7 +220,7 @@ private:
     vk::raii::Image textureImage_{nullptr};
     vk::raii::ImageView textureImageView_{nullptr};
     vk::raii::Sampler textureSampler_{nullptr};
-    
+
     vk::raii::DeviceMemory depthImageMemory_{nullptr};
     vk::raii::Image depthImage_{nullptr};
     vk::raii::ImageView depthImageView_{nullptr};
@@ -222,6 +242,8 @@ private:
     uint64_t nextSignalValue_{kMaxFramesInFlight + 1};
     bool requireSwapChainRecreate_{false};
 
-    glm::vec3 cameraCoords_ {2.0f , 2.0f, 2.0f};
+    glm::vec3 cameraCoords_{2.0f, 2.0f, 2.0f};
+    Camera defaultCamera_{};
+
 };
 }

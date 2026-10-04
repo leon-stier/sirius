@@ -20,7 +20,6 @@ void VkRenderer::Init(VulkanContext& context) {
     CreateGraphicsPipeline();
     InitCommandBuffers();
     CreateDepthResources();
-    CreateTextureImage();
     CreateTextureSampler();
     LoadModel();
     CreateVertexBuffer();
@@ -29,7 +28,14 @@ void VkRenderer::Init(VulkanContext& context) {
     CreateDescriptorPool();
     CreateDescriptorSets();
     CreateSyncObjects();
-    InputManager::Subscribe([this](const InputEvent& e) { ProcessCameraEvent(e); });
+
+    defaultCamera_.Init();
+    defaultCamera_.velocity_ = glm::vec3(0.0f);
+    defaultCamera_.position_ = glm::vec3(0.0f, 0.0f, 0.0f);
+    defaultCamera_.pitch_ = 0.0f;
+    defaultCamera_.yaw_ = 0.0f;
+
+    // InputManager::Subscribe([this](const InputEvent& e) { ProcessCameraEvent(e); });
 }
 
 void VkRenderer::Draw() {
@@ -39,6 +45,7 @@ void VkRenderer::Draw() {
         return;
     }
     try {
+        defaultCamera_.Update();
         DoDraw();
     } catch (vk::SystemError& err) {
         const auto result = static_cast<vk::Result>(err.code().value());
@@ -406,7 +413,57 @@ void VkRenderer::CreateSyncObjects() {
     }
 }
 
-void VkRenderer::CreateTextureImage() {
+void VkRenderer::CreateTextureImage(const uint8_t* pixelData, uint32_t texWidth, uint32_t texHeight, vk::Format textureFormat) {
+    vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(
+            imageSize,
+            vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+        );
+
+    void* data = stagingBufferMemory.mapMemory(0, imageSize);
+    memcpy(data, pixelData, imageSize);
+    stagingBufferMemory.unmapMemory();
+    std::tie(textureImage_, textureImageMemory_) = CreateImage(
+            texWidth,
+            texHeight,
+            textureFormat,
+            vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+            vk::MemoryPropertyFlagBits::eDeviceLocal
+        );
+
+    auto commandBuffer = BeginSingleTimeCommands();
+
+    TransitionImageLayout(
+        textureImage_, commandBuffer,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+        {}, vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
+        vk::ImageAspectFlagBits::eColor
+    );
+
+    CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
+
+    TransitionImageLayout(
+        textureImage_, commandBuffer,
+        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderRead,
+        vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eColor
+    );
+    EndSingleTimeCommands(std::move(commandBuffer));
+
+    textureImageView_ = CreateImageView(*textureImage_, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+
+    if  (textureImageView_ == VK_NULL_HANDLE) {
+        throw std::runtime_error("Failed to create texture image view!");
+    }
+}
+
+// Unused
+void VkRenderer::KtxTextureLoader() {
     // Load KTX2 texture instead of using stb_image
     ktxTexture* texture;
     KTX_error_code result = ktxTexture_CreateFromNamedFile("../../resources/CesiumLogoFlat.ktx2", KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture);
@@ -595,8 +652,13 @@ void VkRenderer::LoadModel() {
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string warn, err;
+    std::string path{"../../resources/tree.glb"};
 
-    const bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "../../resources/BoxTextured.gltf");
+    bool ret;
+    if (EqualsExt(path, ".glb")) ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
+    else if  (EqualsExt(path, ".gltf")) ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    else  throw std::runtime_error("Unsupported file format");
+
     if (!warn.empty()) {
         std::cout << "glTF warning: " << warn << std::endl;
     }
@@ -607,6 +669,35 @@ void VkRenderer::LoadModel() {
 
     if (!ret) {
         throw std::runtime_error("Failed to load glTF model");
+    }
+
+    // Load texture
+    if (!model.materials.empty()) {
+        const auto& mat = model.materials.at(2);
+        int texIndex = mat.pbrMetallicRoughness.baseColorTexture.index;
+
+        if (texIndex >= 0 && texIndex < model.textures.size()) {
+            int imgIndex = model.textures[texIndex].source;
+
+            if (imgIndex >= 0 && imgIndex < model.images.size()) {
+                const tinygltf::Image& gltfImage = model.images[imgIndex];
+
+                // Upload RGBA buffer to Vulkan GPU memory
+                CreateTextureImage(
+                    gltfImage.image.data(),
+                    static_cast<uint32_t>(gltfImage.width),
+                    static_cast<uint32_t>(gltfImage.height),
+                    vk::Format::eR8G8B8A8Srgb
+                );
+            }
+        }
+    }
+    if (textureImage_ == VK_NULL_HANDLE) {
+        CreateTextureImage(
+            std::vector<unsigned char> {255, 255, 255, 255}.data(),
+            1,
+            1
+            );
     }
 
     vertices_.clear();
@@ -628,13 +719,29 @@ void VkRenderer::LoadModel() {
             const tinygltf::BufferView* texBufferView = hasTexCoords ? &model.bufferViews[texAccessor->bufferView] : nullptr;
             const tinygltf::Buffer* texBuffer = hasTexCoords ? &model.buffers[texBufferView->buffer] : nullptr;
             size_t texStride = hasTexCoords ? texAccessor->ByteStride(*texBufferView) : 0;
+            //
+            // // Color Attribute
+            // bool hasColors = primitive.attributes.contains("COLOR_0");
+            // const tinygltf::Accessor* colorAccessor = hasColors ? &model.accessors[primitive.attributes.at("COLOR_0")] : nullptr;
+            // const tinygltf::BufferView* colorBufferView = hasColors ? &model.bufferViews[colorAccessor->bufferView] : nullptr;
+            // const tinygltf::Buffer* colorBuffer = hasColors ? &model.buffers[colorBufferView->buffer] : nullptr;
+            // size_t colorStride = hasColors ? colorAccessor->ByteStride(*colorBufferView) : 0;
 
-            // Color Attribute
-            bool hasColors = primitive.attributes.contains("COLOR_0");
-            const tinygltf::Accessor* colorAccessor = hasColors ? &model.accessors[primitive.attributes.at("COLOR_0")] : nullptr;
-            const tinygltf::BufferView* colorBufferView = hasColors ? &model.bufferViews[colorAccessor->bufferView] : nullptr;
-            const tinygltf::Buffer* colorBuffer = hasColors ? &model.buffers[colorBufferView->buffer] : nullptr;
-            size_t colorStride = hasColors ? colorAccessor->ByteStride(*colorBufferView) : 0;
+            glm::vec3 materialColor{1.0f, 1.0f, 1.0f};
+
+            if (primitive.material >= 0 && primitive.material < model.materials.size()) {
+                const auto& mat = model.materials[primitive.material];
+                const auto& factor = mat.pbrMetallicRoughness.baseColorFactor;
+
+                if (factor.size() >= 3) {
+                    materialColor = glm::vec3(
+                        static_cast<float>(factor[0]),
+                        static_cast<float>(factor[1]),
+                        static_cast<float>(factor[2])
+                    );
+                }
+            }
+
 
             uint32_t baseVertex = static_cast<uint32_t>(vertices_.size());
 
@@ -656,30 +763,28 @@ void VkRenderer::LoadModel() {
                     vertex.texCoord = {0.0f, 0.0f};
                 }
 
-                // Vertex Colors
-                if (hasColors) {
-                    const uint8_t* colorData = &colorBuffer->data[colorBufferView->byteOffset + colorAccessor->byteOffset + i * colorStride];
-                    size_t compSize = tinygltf::GetComponentSizeInBytes(colorAccessor->componentType);
+                // // Vertex Colors
+                // if (hasColors) {
+                //     const uint8_t* colorData = &colorBuffer->data[colorBufferView->byteOffset + colorAccessor->byteOffset + i * colorStride];
+                //     size_t compSize = tinygltf::GetComponentSizeInBytes(colorAccessor->componentType);
+                //
+                //     auto readComp = [&](size_t idx) -> float {
+                //         const uint8_t* ptr = colorData + idx * compSize;
+                //         switch (colorAccessor->componentType) {
+                //             case TINYGLTF_COMPONENT_TYPE_FLOAT:
+                //                 return *reinterpret_cast<const float*>(ptr);
+                //             case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                //                 return *ptr / 255.0f;
+                //             case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                //                 return *reinterpret_cast<const uint16_t*>(ptr) / 65535.0f;
+                //             default:
+                //                 return 1.0f;
+                //         }
+                //     };
 
-                    auto readComp = [&](size_t idx) -> float {
-                        const uint8_t* ptr = colorData + idx * compSize;
-                        switch (colorAccessor->componentType) {
-                            case TINYGLTF_COMPONENT_TYPE_FLOAT:
-                                return *reinterpret_cast<const float*>(ptr);
-                            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-                                return *ptr / 255.0f;
-                            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-                                return *reinterpret_cast<const uint16_t*>(ptr) / 65535.0f;
-                            default:
-                                return 1.0f;
-                        }
-                    };
-
-                    vertex.color = {readComp(0), readComp(1), readComp(2)};
-                } else {
-                    vertex.color = {1.0f, 1.0f, 1.0f};
-                }
-
+                    // vertex.color = {readComp(0), readComp(1), readComp(2)};
+                // }
+                vertex.color = materialColor;
                 vertices_.push_back(vertex);
             }
 
@@ -815,7 +920,7 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.end();
 }
 
-void VkRenderer::UpdateUniformBuffer(uint32_t currentImage, const uint32_t currentFrameIndex) const {
+void VkRenderer::UpdateUniformBuffer(uint32_t currentImage, const uint32_t currentFrameIndex) {
     static auto startTime = std::chrono::high_resolution_clock::now();
 
     const auto currentTime = std::chrono::high_resolution_clock::now();
@@ -823,7 +928,7 @@ void VkRenderer::UpdateUniformBuffer(uint32_t currentImage, const uint32_t curre
     time = 1;
     UniformBufferObject ubo{};
     ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = lookAt(cameraCoords_, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = defaultCamera_.GetViewMatrix();//lookAt(cameraCoords_, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height), 0.1f, 10.0f);
 
     memcpy(frames_.at(currentFrameIndex).uniformBufferMapped, &ubo, sizeof(ubo));
@@ -1065,5 +1170,13 @@ void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) 
 
     context_->GraphicsQueue().submit2(submitInfo, nullptr);
     context_->GraphicsQueue().waitIdle();
+}
+
+bool VkRenderer::EqualsExt(const std::filesystem::path& p, std::string_view expected_ext) {
+    auto ext = p.extension().string();
+    return std::ranges::equal(ext, expected_ext, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a)) ==
+               std::tolower(static_cast<unsigned char>(b));
+    });
 }
 }
