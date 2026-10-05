@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <vulkan/vk_platform.h>
 
+#include "AssetManager.h"
 #include "graphics/camera.h"
 #include "vulkanContext.h"
 
@@ -42,50 +43,52 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     return buffer;
 }
 
-struct Vertex {
+struct GpuVertex {
     glm::vec3 pos;
-    glm::vec3 color;
-    glm::vec2 texCoord;
+    glm::vec3 normal;
+    // glm::vec2 texCoord;
 
     static vk::VertexInputBindingDescription GetBindingDescription() {
         return {
             .binding = 0,
-            .stride = sizeof(Vertex),
+            .stride = sizeof(GpuVertex),
             .inputRate = vk::VertexInputRate::eVertex
         };
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 3> GetAttributeDescriptions() {
+    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescriptions() {
         return {
             {
                 {
                     .location = 0,
                     .binding = 0,
                     .format = vk::Format::eR32G32B32Sfloat,
-                    .offset = offsetof(Vertex, pos)
+                    .offset = offsetof(GpuVertex, pos)
                 },
                 {
                     .location = 1,
                     .binding = 0,
                     .format = vk::Format::eR32G32B32Sfloat,
-                    .offset = offsetof(Vertex, color)
+                    .offset = offsetof(GpuVertex, normal)
                 },
-                {
-                    .location = 2,
-                    .binding = 0,
-                    .format = vk::Format::eR32G32Sfloat,
-                    .offset = offsetof(Vertex, texCoord)
-                }
+                // {
+                //     .location = 2,
+                //     .binding = 0,
+                //     .format = vk::Format::eR32G32Sfloat,
+                //     .offset = offsetof(GpuVertex, texCoord)
+                // }
             }
         };
     }
 };
 
-
-struct UniformBufferObject {
-    glm::mat4 model;
+struct FrameUniforms {
     glm::mat4 view;
-    glm::mat4 proj;
+    glm::mat4 projection;
+};
+
+struct DrawConstants {
+    glm::vec4 baseColor;
 };
 
 struct FrameContext {
@@ -171,7 +174,7 @@ private:
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
 
-    void UpdateUniformBuffer(uint32_t currentImage, uint32_t currentFrameIndex);
+    void UpdateUniformBuffer(uint32_t currentFrameIndex);
 
     void DoDraw();
 
@@ -203,8 +206,11 @@ private:
     static bool EqualsExt(const std::filesystem::path& p, std::string_view expected_ext);
 
     VulkanContext* context_{nullptr};
-    // Members are declared before the objects that depend on them so reverse
-    // declaration-order destruction releases Vulkan dependencies first.
+
+    AssetManager assetManager_;
+    AssetHandle modelHandle_{};
+    const ModelAsset* model_{nullptr};
+
     vk::raii::SwapchainKHR swapChain_{nullptr};
     std::vector<vk::Image> swapChainImages_;
     vk::SurfaceFormat2KHR swapChainSurfaceFormat_;
@@ -225,8 +231,6 @@ private:
     vk::raii::Image depthImage_{nullptr};
     vk::raii::ImageView depthImageView_{nullptr};
 
-    std::vector<Vertex> vertices_;
-    std::vector<uint32_t> indices_;
     vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
     vk::raii::Buffer vertexBuffer_{nullptr};
     vk::raii::DeviceMemory indexBufferMemory_{nullptr};
