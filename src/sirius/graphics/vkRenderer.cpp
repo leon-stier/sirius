@@ -31,7 +31,7 @@ void VkRenderer::Init(VulkanContext& context) {
 
     defaultCamera_.Init();
     defaultCamera_.velocity_ = glm::vec3(0.0f);
-    defaultCamera_.position_ = glm::vec3(0.0f, 0.0f, 0.0f);
+    defaultCamera_.position_ = glm::vec3(0.0f, 0.0f, 20.0f);
     defaultCamera_.pitch_ = 0.0f;
     defaultCamera_.yaw_ = 0.0f;
 
@@ -267,7 +267,7 @@ void VkRenderer::CreateGraphicsPipeline() {
     vk::PipelineDepthStencilStateCreateInfo depthStencil{
         .depthTestEnable = vk::True,
         .depthWriteEnable = vk::True,
-        .depthCompareOp = vk::CompareOp::eLess,
+        .depthCompareOp = vk::CompareOp::eGreater,
         .depthBoundsTestEnable = vk::False,
         .stencilTestEnable = vk::False
     };
@@ -855,8 +855,8 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     );
 
     // Set up the color attachment
-    constexpr vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-    constexpr vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+    constexpr vk::ClearValue clearColor = vk::ClearColorValue(1.0f, 1.0f, 1.0f, 1.0f);
+    constexpr vk::ClearValue clearDepth = vk::ClearDepthStencilValue(0.0f, 0);
 
     vk::RenderingAttachmentInfo attachmentInfo = {
         .imageView = swapChainImageViews_.at(imageIndex),
@@ -929,7 +929,7 @@ void VkRenderer::UpdateUniformBuffer(uint32_t currentImage, const uint32_t curre
     UniformBufferObject ubo{};
     ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     ubo.view = defaultCamera_.GetViewMatrix();//lookAt(cameraCoords_, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height), 0.1f, 10.0f);
+    ubo.proj = glm::perspective(glm::radians(70.0f), static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height), 10000.0f, 0.1f);
 
     memcpy(frames_.at(currentFrameIndex).uniformBufferMapped, &ubo, sizeof(ubo));
 }

@@ -4,6 +4,8 @@
 
 #include "camera.h"
 #define GLM_ENABLE_EXPERIMENTAL
+#include <algorithm>
+
 #include "glm/gtx/quaternion.hpp"
 #include "glm/gtx/transform.hpp"
 
@@ -16,9 +18,9 @@ void Camera::Init() {
 void Camera::ProcessWindowEvent(InputEvent event) {
     std::visit( Overload{
         [this](MouseMoveEvent e) {
-            yaw_ += static_cast<float>(e.x) / 500.0f;
+            yaw_ -= static_cast<float>(e.x) / 500.0f;
             pitch_ -= static_cast<float>(e.y) / 500.0f;
-
+            pitch_ = std::clamp(pitch_, -1.55f, 1.55f);
         },
         [](MouseWheelEvent e) {},
         [this, event](KeyEvent e) {
@@ -56,7 +58,7 @@ glm::mat4 Camera::GetViewMatrix() {
 
 glm::mat4 Camera::GetRotationMatrix() {
     glm::quat pitchRotation = glm::angleAxis(pitch_, glm::vec3 { 1.f, 0.f, 0.f });
-    glm::quat yawRotation = glm::angleAxis(yaw_, glm::vec3 { 0.f, -1.f, 0.f });
+    glm::quat yawRotation = glm::angleAxis(yaw_, glm::vec3 { 0.f, 1.f, 0.f });
 
     return glm::toMat4(yawRotation * pitchRotation);
 }
