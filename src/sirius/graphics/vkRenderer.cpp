@@ -1,14 +1,15 @@
+#define NOMINMAX
+
 #include "vkRenderer.h"
 #include "window/wndProc.h"
-
+#include <iostream>
 #include <ranges>
 #include <glm/gtc/matrix_transform.hpp>
-
-#include <ktx.h>
 
 namespace sirius {
 void VkRenderer::Init(VulkanContext& context) {
     context_ = &context;
+    assetUploader_.Init(context);
 
     CreateSwapChain();
     CreateImageViews();
@@ -18,11 +19,6 @@ void VkRenderer::Init(VulkanContext& context) {
 
     InitCommandBuffers();
     CreateDepthResources();
-
-    // CreateTextureSampler();
-    LoadModel();
-    CreateVertexBuffer();
-    CreateIndexBuffer();
 
     CreateUniformBuffers();
     CreateDescriptorPool();
@@ -36,6 +32,26 @@ void VkRenderer::Init(VulkanContext& context) {
     defaultCamera_.yaw_ = 0.0f;
 
     // InputManager::Subscribe([this](const InputEvent& e) { ProcessCameraEvent(e); });
+}
+
+RenderInstanceHandle VkRenderer::LoadModelInstance(const std::filesystem::path& path, const glm::mat4& transform) {
+    const AssetHandle cpuHandle = assetManager_.LoadModel(path);
+    GpuAssetHandle gpuHandle;
+    if (const auto it = uploadedAssets_.find(cpuHandle.value); it != uploadedAssets_.end()) {
+        gpuHandle = it->second;
+    } else {
+        gpuHandle = assetUploader_.Upload(assetManager_.Get(cpuHandle));
+        uploadedAssets_.emplace(cpuHandle.value, gpuHandle);
+    }
+    return renderWorld_.CreateInstance(gpuHandle, transform);
+}
+
+void VkRenderer::DestroyInstance(const RenderInstanceHandle handle) {
+    renderWorld_.DestroyInstance(handle);
+}
+
+void VkRenderer::SetInstanceTransform(const RenderInstanceHandle handle, const glm::mat4& transform) {
+    renderWorld_.SetTransform(handle, transform);
 }
 
 void VkRenderer::Draw() {
@@ -277,7 +293,7 @@ void VkRenderer::CreateGraphicsPipeline() {
     };
 
     constexpr vk::PushConstantRange drawConstantsRange{
-        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         .offset = 0,
         .size = sizeof(DrawConstants)
     };
@@ -412,149 +428,6 @@ void VkRenderer::CreateSyncObjects() {
     }
 }
 
-void VkRenderer::CreateTextureImage(const uint8_t* pixelData, uint32_t texWidth, uint32_t texHeight, vk::Format textureFormat) {
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
-
-    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(
-            imageSize,
-            vk::BufferUsageFlagBits::eTransferSrc,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-        );
-
-    void* data = stagingBufferMemory.mapMemory(0, imageSize);
-    memcpy(data, pixelData, imageSize);
-    stagingBufferMemory.unmapMemory();
-    std::tie(textureImage_, textureImageMemory_) = CreateImage(
-            texWidth,
-            texHeight,
-            textureFormat,
-            vk::ImageTiling::eOptimal,
-            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-            vk::MemoryPropertyFlagBits::eDeviceLocal
-        );
-
-    auto commandBuffer = BeginSingleTimeCommands();
-
-    TransitionImageLayout(
-        textureImage_, commandBuffer,
-        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-        {}, vk::AccessFlagBits2::eTransferWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
-        vk::ImageAspectFlagBits::eColor
-    );
-
-    CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
-
-    TransitionImageLayout(
-        textureImage_, commandBuffer,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderRead,
-        vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::ImageAspectFlagBits::eColor
-    );
-    EndSingleTimeCommands(std::move(commandBuffer));
-
-    textureImageView_ = CreateImageView(*textureImage_, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
-
-    if  (textureImageView_ == VK_NULL_HANDLE) {
-        throw std::runtime_error("Failed to create texture image view!");
-    }
-}
-
-// Unused
-void VkRenderer::KtxTextureLoader() {
-    // Load KTX2 texture instead of using stb_image
-    ktxTexture* texture;
-    KTX_error_code result = ktxTexture_CreateFromNamedFile("../../resources/CesiumLogoFlat.ktx2", KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture);
-
-    if (result != KTX_SUCCESS) {
-        throw std::runtime_error("failed to load ktx texture image!");
-    }
-
-    // Get texture dimensions and data
-    uint32_t texWidth = texture->baseWidth;
-    uint32_t texHeight = texture->baseHeight;
-    ktx_size_t imageSize = ktxTexture_GetImageSize(texture, 0);
-    ktx_uint8_t* ktxTextureData = ktxTexture_GetData(texture);
-
-    // Create staging buffer
-    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    // Copy texture data to staging buffer
-    void* data = stagingBufferMemory.mapMemory(0, imageSize);
-    memcpy(data, ktxTextureData, imageSize);
-    stagingBufferMemory.unmapMemory();
-
-    // Determine the Vulkan format from KTX format
-    vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb; // Default format, should be determined from KTX metadata
-
-    // Create the texture image
-    std::tie(textureImage_, textureImageMemory_) = CreateImage(texWidth, texHeight, textureFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-    // Copy data from staging buffer to texture image
-    auto commandBuffer = BeginSingleTimeCommands();
-    TransitionImageLayout(textureImage_, commandBuffer, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, {}, vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer, vk::ImageAspectFlagBits::eColor);
-    CopyBufferToImage(commandBuffer, stagingBuffer, textureImage_, texWidth, texHeight);
-    TransitionImageLayout(textureImage_, commandBuffer, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader, vk::ImageAspectFlagBits::eColor);
-
-    // Cleanup KTX resources
-    ktxTexture_Destroy(texture);
-}
-
-void VkRenderer::CreateTextureSampler() {
-    vk::PhysicalDeviceProperties2 properties = context_->PhysicalDevice().getProperties2();
-    vk::SamplerCreateInfo samplerCreateInfo{
-        .magFilter = vk::Filter::eLinear,
-        .minFilter = vk::Filter::eLinear,
-        .mipmapMode = vk::SamplerMipmapMode::eLinear,
-        .addressModeU = vk::SamplerAddressMode::eRepeat,
-        .addressModeV = vk::SamplerAddressMode::eRepeat,
-        .addressModeW = vk::SamplerAddressMode::eRepeat,
-        .mipLodBias = 0.0f,
-        .anisotropyEnable = vk::True,
-        .maxAnisotropy = properties.properties.limits.maxSamplerAnisotropy,
-        .compareEnable = vk::False,
-        .compareOp = vk::CompareOp::eAlways
-    };
-
-    textureSampler_ = vk::raii::Sampler(context_->Device(), samplerCreateInfo);
-}
-
-void VkRenderer::CreateVertexBuffer() {
-    std::vector<GpuVertex> vertices;
-    vertices.reserve(model_->vertices.size());
-
-    for (const AssetVertex& source : model_->vertices) {
-        vertices.emplace_back(source.position, source.normal);
-    }
-
-    const vk::DeviceSize bufferSize = sizeof(GpuVertex) * vertices.size();
-
-    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, vertices.data(), bufferSize);
-    stagingBufferMemory.unmapMemory();
-
-    std::tie(vertexBuffer_, vertexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-    CopyBuffer(stagingBuffer, vertexBuffer_, bufferSize);
-}
-
-void VkRenderer::CreateIndexBuffer() {
-    const vk::DeviceSize bufferSize = sizeof(uint32_t) * model_->indices.size();
-
-    auto [stagingBuffer, stagingBufferMemory] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, model_->indices.data(), bufferSize);
-    stagingBufferMemory.unmapMemory();
-
-    std::tie(indexBuffer_, indexBufferMemory_) = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-    CopyBuffer(stagingBuffer, indexBuffer_, bufferSize);
-}
-
 void VkRenderer::CreateUniformBuffers() {
     for (auto& frame : frames_) {
         constexpr vk::DeviceSize bufferSize = sizeof(FrameUniforms);
@@ -604,7 +477,6 @@ void VkRenderer::CreateDescriptorSets() {
             .pBufferInfo = &bufferInfo
         };
 
-        context_->Device().updateDescriptorSets(write,{});
         context_->Device().updateDescriptorSets(write, {});
     }
 }
@@ -626,23 +498,6 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(con
     buffer.bindMemory(bufferMemory, 0);
 
     return {std::move(buffer), std::move(bufferMemory)};
-}
-
-void VkRenderer::LoadModel() {
-    modelHandle_ = assetManager_.LoadModel("../../resources/tree.glb");
-    model_ = &assetManager_.Get(modelHandle_);
-
-    if (model_->vertices.empty()) {
-        throw std::runtime_error("Loaded model contains no vertices");
-    }
-
-    if (model_->indices.empty()) {
-        throw std::runtime_error("Loaded model contains no indices");
-    }
-
-    if (model_->primitives.empty()) {
-        throw std::runtime_error("Loaded model contains no primitives");
-    }
 }
 
 void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t currentFrameIndex) const {
@@ -716,20 +571,34 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
     buffer.setViewport(0, vk::Viewport(0.0f, static_cast<float>(swapChainExtent_.height), static_cast<float>(swapChainExtent_.width), -static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f)); // Inverted height because glm and Vulkan disagree where down is
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
-    buffer.bindVertexBuffers(0, *vertexBuffer_, {0});
-    buffer.bindIndexBuffer(*indexBuffer_, 0, vk::IndexType::eUint32);
     buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, *frames_.at(currentFrameIndex).descriptorSet, nullptr);
 
-    for (const AssetPrimitive& primitive : model_->primitives) {
-        const AssetMaterial& material = model_->materials.at(primitive.materialIndex);
+    if (assetUploader_.HasBuffers()) {
+        buffer.bindVertexBuffers(0, assetUploader_.VertexBuffer(), {0});
+        buffer.bindIndexBuffer(assetUploader_.IndexBuffer(), 0, vk::IndexType::eUint32);
+    }
 
-        const DrawConstants constants{
-            .baseColor = material.baseColorFactor
-        };
+    for (const RenderItem& item : renderWorld_.Items()) {
+        if (!item.asset.IsValid() || !assetUploader_.HasBuffers()) continue;
+        const GpuAsset& asset = assetUploader_.Get(item.asset);
+        for (const GpuPrimitive& primitive : asset.primitives) {
+            const AssetMaterial& material = asset.materials.at(primitive.materialIndex);
 
-        buffer.pushConstants(*pipelineLayout_, vk::ShaderStageFlagBits::eFragment, 0, sizeof(constants), &constants);
+            const DrawConstants constants{
+                .model = item.transform,
+                .baseColor = material.baseColorFactor
+            };
 
-        buffer.drawIndexed(primitive.indexCount, 1, primitive.firstIndex, primitive.vertexOffset, 0);
+            buffer.pushConstants(
+                *pipelineLayout_,
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                0,
+                sizeof(constants),
+                &constants
+            );
+
+            buffer.drawIndexed(primitive.indexCount, 1, primitive.firstIndex, primitive.vertexOffset, 0);
+        }
     }
 
     // End rendering
@@ -757,14 +626,14 @@ void VkRenderer::UpdateUniformBuffer(const uint32_t currentFrameIndex) {
     uniforms.view = defaultCamera_.GetViewMatrix();
 
     uniforms.projection =
-        glm::perspective(
-            glm::radians(70.0f),
-            static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height),
-            10000.0f,
-            0.1f
-        );
+            glm::perspective(
+                glm::radians(70.0f),
+                static_cast<float>(swapChainExtent_.width) / static_cast<float>(swapChainExtent_.height),
+                10000.0f,
+                0.1f
+            );
 
-    std::memcpy(frames_[currentFrameIndex].uniformBufferMapped, &uniforms,sizeof(uniforms));
+    std::memcpy(frames_[currentFrameIndex].uniformBufferMapped, &uniforms, sizeof(uniforms));
 }
 
 void VkRenderer::DoDraw() {
@@ -782,13 +651,13 @@ void VkRenderer::DoDraw() {
         .pSemaphores = &semHandle,
         .pValues = &waitValue
     };
-    const vk::Result waitResult{context_->Device().waitSemaphores(waitInfo, std::numeric_limits<uint64_t>::max())};
+    const vk::Result waitResult{context_->Device().waitSemaphores(waitInfo, (std::numeric_limits<uint64_t>::max)())};
     if (waitResult != vk::Result::eSuccess) {
         // Handle unexpected results (e.g., eTimeout or device loss)
         throw std::runtime_error("Failed or timed out waiting for timeline semaphore!");
     }
 
-    auto [acquireResult, imageIndex] = swapChain_.acquireNextImage(std::numeric_limits<uint64_t>::max(), *frames_[currentFrameIndex].imageAcquiredSemaphore, nullptr);
+    auto [acquireResult, imageIndex] = swapChain_.acquireNextImage((std::numeric_limits<uint64_t>::max)(), *frames_[currentFrameIndex].imageAcquiredSemaphore, nullptr);
     // Result can also indicate out of date images
     if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
         requireSwapChainRecreate_ = true;
@@ -957,23 +826,6 @@ void VkRenderer::CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::B
     EndSingleTimeCommands(std::move(commandCopyBuffer));
 }
 
-void VkRenderer::CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const vk::raii::Buffer& buffer, const vk::raii::Image& image, const uint32_t width, const uint32_t height) {
-    const vk::BufferImageCopy region{
-        .bufferOffset = 0,
-        .bufferRowLength = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .mipLevel = 0,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        },
-        .imageOffset = {.x = 0, .y = 0, .z = 0},
-        .imageExtent = {.width = width, .height = height, .depth = 1}
-    };
-    commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
-}
-
 vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
     const vk::CommandBufferAllocateInfo allocateInfo{
         .commandPool = ephemeralCommandPool_,
@@ -1003,13 +855,5 @@ void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) 
 
     context_->GraphicsQueue().submit2(submitInfo, nullptr);
     context_->GraphicsQueue().waitIdle();
-}
-
-bool VkRenderer::EqualsExt(const std::filesystem::path& p, std::string_view expected_ext) {
-    auto ext = p.extension().string();
-    return std::ranges::equal(ext, expected_ext, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a)) ==
-               std::tolower(static_cast<unsigned char>(b));
-    });
 }
 }

@@ -6,6 +6,10 @@ add_library(graphics STATIC
         renderer.cpp
         vkRenderer.h
         vkRenderer.cpp
+        GpuAssetUploader.h
+        GpuAssetUploader.cpp
+        RenderWorld.h
+        RenderWorld.cpp
         vulkanContext.cpp
         vulkanContext.h
         AssetManager.cpp
@@ -15,6 +19,7 @@ add_library(graphics STATIC
 target_link_libraries(graphics
         PUBLIC
             Vulkan::Vulkan
+            glm::glm
             KTX::ktx
 )
 

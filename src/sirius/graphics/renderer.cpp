@@ -16,4 +16,16 @@ void Renderer::Draw() {
     vkRenderer_.Draw();
 }
 
+RenderInstanceHandle Renderer::LoadModelInstance(const std::filesystem::path& path, const glm::mat4& transform) {
+    return vkRenderer_.LoadModelInstance(path, transform);
+}
+
+void Renderer::DestroyInstance(const RenderInstanceHandle handle) {
+    vkRenderer_.DestroyInstance(handle);
+}
+
+void Renderer::SetInstanceTransform(const RenderInstanceHandle handle, const glm::mat4& transform) {
+    vkRenderer_.SetInstanceTransform(handle, transform);
+}
+
 }

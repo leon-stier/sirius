@@ -4,6 +4,10 @@
 
 #pragma once
 #include <filesystem>
+#include <limits>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -36,11 +40,16 @@ struct ModelAsset {
 };
 
 struct AssetHandle {
-    uint32_t value{std::numeric_limits<uint32_t>::max()};
+    static constexpr uint32_t InvalidValue = (std::numeric_limits<uint32_t>::max)();
+
+    uint32_t value{InvalidValue};
 
     bool IsValid() const noexcept {
-        return value != std::numeric_limits<uint32_t>::max();
+        return value != InvalidValue;
     }
+
+    explicit operator bool() const noexcept { return IsValid(); }
+    friend bool operator==(AssetHandle, AssetHandle) = default;
 };
 
 class AssetManager {

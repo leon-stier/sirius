@@ -16,6 +16,7 @@ struct VSOutput {
 };
 
 struct DrawConstants {
+    float4x4 model;
     float4 baseColor;
 };
 
@@ -26,15 +27,14 @@ DrawConstants draw;
 VSOutput vertMain(VSInput input) {
     VSOutput output;
 
-    float4 viewPosition = mul(frame.view, float4(input.inPosition, 1.0));
+    float4 modelPosition = mul(draw.model, float4(input.inPosition, 1.0));
+    float4 viewPosition = mul(frame.view, modelPosition);
     output.pos = mul(frame.projection, viewPosition);
 
     output.normal = input.inNormal;
 
     return output;
 }
-
-Sampler2D texture;
 
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {

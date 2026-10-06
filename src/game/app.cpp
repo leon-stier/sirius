@@ -3,6 +3,8 @@
 #include <iostream>
 #include <optional>
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include "graphics/renderer.h"
 #include "input/input_manager.h"
 #include "window/window.h"
@@ -28,6 +30,8 @@ Fsm::FsmReturn App::Init() {
     }
     try {
         sirius::Renderer::Init();
+        sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
+        sirius::Renderer::LoadModelInstance("../../resources/tree.glb",glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.0f, 0.0f)));
     } catch (const std::exception& e) {
         std::cerr << "Exception while initializing Renderer: " << e.what() << std::endl;
         SetState(kShutdownSystem);

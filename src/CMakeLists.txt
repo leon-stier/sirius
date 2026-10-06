@@ -9,8 +9,8 @@ project(Sirius
 )
 
 find_package(Vulkan 1.4.357 REQUIRED)
-find_package(ktx CONFIG REQUIRED)
-find_package(tinyobjloader CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
+find_package(Ktx CONFIG REQUIRED)
 
 add_compile_definitions(
         VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1

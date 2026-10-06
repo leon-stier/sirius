@@ -5,9 +5,12 @@
 
 #include <fstream>
 #include <filesystem>
+#include <unordered_map>
 #include <vulkan/vk_platform.h>
 
 #include "AssetManager.h"
+#include "GpuAssetUploader.h"
+#include "RenderWorld.h"
 #include "graphics/camera.h"
 #include "vulkanContext.h"
 
@@ -43,51 +46,13 @@ static std::vector<uint32_t> ReadFile(const std::filesystem::path& filePath) {
     return buffer;
 }
 
-struct GpuVertex {
-    glm::vec3 pos;
-    glm::vec3 normal;
-    // glm::vec2 texCoord;
-
-    static vk::VertexInputBindingDescription GetBindingDescription() {
-        return {
-            .binding = 0,
-            .stride = sizeof(GpuVertex),
-            .inputRate = vk::VertexInputRate::eVertex
-        };
-    }
-
-    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescriptions() {
-        return {
-            {
-                {
-                    .location = 0,
-                    .binding = 0,
-                    .format = vk::Format::eR32G32B32Sfloat,
-                    .offset = offsetof(GpuVertex, pos)
-                },
-                {
-                    .location = 1,
-                    .binding = 0,
-                    .format = vk::Format::eR32G32B32Sfloat,
-                    .offset = offsetof(GpuVertex, normal)
-                },
-                // {
-                //     .location = 2,
-                //     .binding = 0,
-                //     .format = vk::Format::eR32G32Sfloat,
-                //     .offset = offsetof(GpuVertex, texCoord)
-                // }
-            }
-        };
-    }
-};
-
 struct FrameUniforms {
     glm::mat4 view;
     glm::mat4 projection;
 };
 
 struct DrawConstants {
+    glm::mat4 model;
     glm::vec4 baseColor;
 };
 
@@ -109,6 +74,10 @@ public:
     void Init(VulkanContext& context);
 
     void Draw();
+
+    RenderInstanceHandle LoadModelInstance(const std::filesystem::path& path, const glm::mat4& transform = glm::mat4(1.0f));
+    void DestroyInstance(RenderInstanceHandle handle);
+    void SetInstanceTransform(RenderInstanceHandle handle, const glm::mat4& transform);
 
     ~VkRenderer() {
         if (context_ != nullptr) {
@@ -150,16 +119,6 @@ private:
 
     void CreateSyncObjects();
 
-    void CreateTextureImage(const uint8_t* pixelData, uint32_t texWidth, uint32_t texHeight, vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb);
-
-    void KtxTextureLoader();
-
-    void CreateTextureSampler();
-
-    void CreateVertexBuffer();
-
-    void CreateIndexBuffer();
-
     void CreateUniformBuffers();
 
     void CreateDescriptorPool();
@@ -167,9 +126,6 @@ private:
     void CreateDescriptorSets();
 
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
-
-    //////////// Scene ////////////
-    void LoadModel();
 
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
@@ -197,19 +153,16 @@ private:
 
     void CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) const;
 
-    void CopyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const vk::raii::Buffer& buffer, const vk::raii::Image& image, uint32_t width, uint32_t height);
-
     vk::raii::CommandBuffer BeginSingleTimeCommands() const;
 
     void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
-    static bool EqualsExt(const std::filesystem::path& p, std::string_view expected_ext);
-
     VulkanContext* context_{nullptr};
 
     AssetManager assetManager_;
-    AssetHandle modelHandle_{};
-    const ModelAsset* model_{nullptr};
+    GpuAssetUploader assetUploader_;
+    RenderWorld renderWorld_;
+    std::unordered_map<uint32_t, GpuAssetHandle> uploadedAssets_;
 
     vk::raii::SwapchainKHR swapChain_{nullptr};
     std::vector<vk::Image> swapChainImages_;
@@ -222,19 +175,10 @@ private:
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
 
-    vk::raii::DeviceMemory textureImageMemory_{nullptr};
-    vk::raii::Image textureImage_{nullptr};
-    vk::raii::ImageView textureImageView_{nullptr};
-    vk::raii::Sampler textureSampler_{nullptr};
-
     vk::raii::DeviceMemory depthImageMemory_{nullptr};
     vk::raii::Image depthImage_{nullptr};
     vk::raii::ImageView depthImageView_{nullptr};
 
-    vk::raii::DeviceMemory vertexBufferMemory_{nullptr};
-    vk::raii::Buffer vertexBuffer_{nullptr};
-    vk::raii::DeviceMemory indexBufferMemory_{nullptr};
-    vk::raii::Buffer indexBuffer_{nullptr};
     std::array<FrameContext, kMaxFramesInFlight> frames_;
 
     vk::raii::CommandPool ephemeralCommandPool_{nullptr};
