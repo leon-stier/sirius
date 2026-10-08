@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "flight.h"
 #include "core/fsm.h"
 
 class App final : public Fsm {
@@ -25,5 +26,6 @@ public:
 protected:
     FsmReturn UpdateState(signed short state) override;
 private:
+    Flight game;
     bool isSystemInitialized_ = false;
 };

@@ -25,6 +25,12 @@ public:
 
     glm::mat4 GetRotationMatrix();
 
+    glm::mat4 GetLockedMatrix();
+
+    void SetLockedMatrix(const glm::mat4& newTransform);
+
+    glm::mat4 transform_;
+
     glm::vec3 velocity_;
     glm::vec3 position_;
     float pitch_{0.0f};

@@ -30,14 +30,16 @@ Fsm::FsmReturn App::Init() {
     }
     try {
         sirius::Renderer::Init();
-        sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
-        sirius::Renderer::LoadModelInstance("../../resources/tree.glb",glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.0f, 0.0f)));
     } catch (const std::exception& e) {
         std::cerr << "Exception while initializing Renderer: " << e.what() << std::endl;
         SetState(kShutdownSystem);
         return kExit;
     }
     sirius::InputManager::Init();
+
+    game = Flight{};
+    game.Init();
+
     SetState(kRunGame);
     return kContinue;
 }
@@ -62,6 +64,7 @@ Fsm::FsmReturn App::RunGame() {
         return kContinue;
     }
     sirius::InputManager::Notify();
+    game.Update(1);
     sirius::Renderer::Draw();
     return kContinue;
 }

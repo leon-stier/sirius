@@ -52,6 +52,7 @@ void VkRenderer::DestroyInstance(const RenderInstanceHandle handle) {
 
 void VkRenderer::SetInstanceTransform(const RenderInstanceHandle handle, const glm::mat4& transform) {
     renderWorld_.SetTransform(handle, transform);
+    defaultCamera_.SetLockedMatrix(transform);
 }
 
 void VkRenderer::Draw() {
@@ -623,7 +624,8 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
 void VkRenderer::UpdateUniformBuffer(const uint32_t currentFrameIndex) {
     FrameUniforms uniforms{};
 
-    uniforms.view = defaultCamera_.GetViewMatrix();
+    // uniforms.view = defaultCamera_.GetViewMatrix();
+    uniforms.view = glm::inverse(defaultCamera_.GetLockedMatrix());
 
     uniforms.projection =
             glm::perspective(

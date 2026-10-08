@@ -12,7 +12,7 @@
 
 namespace sirius {
 void Camera::Init() {
-    InputManager::Subscribe([this](const InputEvent& e) { ProcessWindowEvent(e); });
+    // InputManager::Subscribe([this](const InputEvent& e) { ProcessWindowEvent(e); });
 }
 
 void Camera::ProcessWindowEvent(InputEvent event) {
@@ -61,5 +61,13 @@ glm::mat4 Camera::GetRotationMatrix() {
     glm::quat yawRotation = glm::angleAxis(yaw_, glm::vec3 { 0.f, 1.f, 0.f });
 
     return glm::toMat4(yawRotation * pitchRotation);
+}
+
+glm::mat4 Camera::GetLockedMatrix() {
+    return transform_ * glm::translate(glm::vec3(0.0f, 5.0f, 10.0f));
+}
+
+void Camera::SetLockedMatrix(const glm::mat4& newTransform) {
+    transform_ = newTransform;
 }
 }
