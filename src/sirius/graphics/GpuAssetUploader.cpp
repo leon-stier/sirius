@@ -13,7 +13,7 @@ vk::VertexInputBindingDescription GpuVertex::GetBindingDescription() {
     };
 }
 
-std::array<vk::VertexInputAttributeDescription, 2> GpuVertex::GetAttributeDescriptions() {
+std::array<vk::VertexInputAttributeDescription, 3> GpuVertex::GetAttributeDescriptions() {
     return {
         {
             {
@@ -27,6 +27,12 @@ std::array<vk::VertexInputAttributeDescription, 2> GpuVertex::GetAttributeDescri
                 .binding = 0,
                 .format = vk::Format::eR32G32B32Sfloat,
                 .offset = offsetof(GpuVertex, normal)
+            },
+            {
+                .location = 2,
+                .binding = 0,
+                .format = vk::Format::eR32G32Sfloat,
+                .offset = offsetof(GpuVertex, uv)
             }
         }
     };
@@ -40,6 +46,30 @@ void GpuAssetUploader::Init(VulkanContext& context) {
         .queueFamilyIndex = context.GraphicsQueueIndex()
     };
     commandPool_ = vk::raii::CommandPool(context.Device(), poolInfo);
+
+    const vk::SamplerCreateInfo samplerCreateInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        .anisotropyEnable = vk::True,
+        .maxAnisotropy = 16.0f,
+        .minLod = 0.0f,
+        .maxLod = 0.0f
+    };
+
+    textureSampler_ = vk::raii::Sampler(context.Device(), samplerCreateInfo);
+
+    AssetTexture whiteTexture{
+        .width = 1,
+        .height = 1,
+        .pixels = {255, 255, 255, 255}
+    };
+
+    textures_.push_back({});
+    UploadTextureData(whiteTexture, textures_.front());
 }
 
 GpuAssetHandle GpuAssetUploader::Upload(const ModelAsset& asset) {
@@ -55,7 +85,7 @@ GpuAssetHandle GpuAssetUploader::Upload(const ModelAsset& asset) {
 
     vertices_.reserve(vertices_.size() + asset.vertices.size());
     for (const AssetVertex& vertex : asset.vertices) {
-        vertices_.push_back({.position = vertex.position, .normal = vertex.normal});
+        vertices_.push_back({.position = vertex.position, .normal = vertex.normal, .uv = vertex.uv});
     }
     indices_.insert(indices_.end(), asset.indices.begin(), asset.indices.end());
 
@@ -105,6 +135,23 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> GpuAssetUploader::CreateBuff
     auto memory = vk::raii::DeviceMemory(context_->Device(), allocateInfo);
     buffer.bindMemory(memory, 0);
     return {std::move(buffer), std::move(memory)};
+}
+
+void GpuAssetUploader::UploadTextureData(const AssetTexture& texture, GpuTexture& destination) {
+    const size_t expectedSize = static_cast<size_t>(texture.width) * static_cast<size_t>(texture.height) * 4;
+
+    if (texture.width == 0 || texture.height == 0 || texture.pixels.size() != expectedSize) {
+        throw std::runtime_error("Invalid RGBA texture data");
+    }
+
+    auto [image, imageMemory] = CreateTextureImage(texture.width, texture.height);
+
+    const vk::DeviceSize byteSize = static_cast<vk::DeviceSize>(texture.pixels.size());
+
+    auto [stagingBuffer, stagingMemory] = CreateBuffer(byteSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+}
+
+std::pair<vk::raii::Image, vk::raii::DeviceMemory> GpuAssetUploader::CreateTextureImage(uint32_t width, uint32_t height) const {
 }
 
 uint32_t GpuAssetUploader::FindMemoryType(

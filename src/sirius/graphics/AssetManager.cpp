@@ -500,4 +500,11 @@ const ModelAsset& AssetManager::Get(const AssetHandle handle) const {
     }
     return assets_.at(handle.value);
 }
+
+const AssetTexture& AssetManager::Get(TextureHandle handle) const {
+    if (!handle.IsValid() || handle.value >= textures_.size()) {
+        throw std::runtime_error("Texture handle is invalid");
+    }
+    return textures_.at(handle.value);
+}
 }

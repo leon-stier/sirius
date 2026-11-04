@@ -80,6 +80,7 @@ public:
     AssetHandle LoadModel(const std::filesystem::path& path);
 
     const ModelAsset& Get(AssetHandle handle) const;
+    const AssetTexture& Get(TextureHandle handle) const;
 private:
     AssetHandle ImportModel(const std::filesystem::path& path);
 
