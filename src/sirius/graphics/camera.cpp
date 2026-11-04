@@ -12,7 +12,7 @@
 
 namespace sirius {
 void Camera::Init() {
-    // InputManager::Subscribe([this](const InputEvent& e) { ProcessWindowEvent(e); });
+    InputManager::Subscribe([this](const InputEvent& e) { ProcessWindowEvent(e); });
 }
 
 void Camera::ProcessWindowEvent(InputEvent event) {

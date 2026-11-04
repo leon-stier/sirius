@@ -172,6 +172,17 @@ namespace {
     }
 
     [[nodiscard]]
+    glm::vec2 ReadTexCoord(const tinygltf::Model& model, const tinygltf::Accessor& accessor, const size_t elementIndex) {
+        if (accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT || accessor.type != TINYGLTF_TYPE_VEC2) {
+            throw std::runtime_error("Only FLOAT VEC2 TEXCOORD_0 accessors are supported");
+        }
+
+        glm::vec2 uv;
+        std::memcpy(glm::value_ptr(uv), GetAccessorElement(model, accessor, elementIndex), sizeof(uv));
+        return uv;
+    }
+
+    [[nodiscard]]
     uint32_t GetMaterialIndex(const tinygltf::Primitive& primitive, const size_t materialCount) {
         if (primitive.material < 0) return 0;
 
@@ -181,6 +192,43 @@ namespace {
             throw std::runtime_error(std::format("Invalid glTF material index: {}", primitive.material));
         }
         return static_cast<uint32_t>(materialIndex + 1);
+    }
+
+    std::string MakeTextureKey(const std::filesystem::path& modelPath, const tinygltf::Image& image, int imageIndex) {
+        // If uri starts with "data:", it means that the image is embedded and doesn't have a path
+        if (!image.uri.empty() && !image.uri.starts_with("data:")) {
+            const auto imagePath = std::filesystem::weakly_canonical(modelPath.parent_path() / image.uri);
+            return "file:" + imagePath.generic_string();
+        }
+
+        // If it is embedded, make the key from the modelPath and the image index
+        return "embedded:" + modelPath.generic_string() + "#" + std::to_string(imageIndex);
+    }
+
+    TextureHandle LoadTexture(const std::filesystem::path& modelPath, const tinygltf::Image& source, int imageIndex, std::vector<AssetTexture>& textures, std::unordered_map<std::string, TextureHandle>& textureCache) {
+        const std::string key = MakeTextureKey(modelPath, source, imageIndex);
+
+        if (const auto it = textureCache.find(key); it != textureCache.end()) {
+            return it->second;
+        }
+
+        if (source.width <= 0 || source.height <= 0 || source.image.empty()) {
+            throw std::runtime_error("glTF texture has no decoded pixel data in " + modelPath.string());
+        }
+
+        AssetTexture texture {
+            .width = static_cast<uint32_t>(source.width),
+            .height = static_cast<uint32_t>(source.height),
+            .pixels = source.image
+        };
+
+        const TextureHandle handle {
+            .value = static_cast<uint32_t>(textures.size())
+        };
+
+        textures.push_back(std::move(texture));
+        textureCache.emplace(key, handle);
+        return handle;
     }
 
     void ImportPrimitive(const tinygltf::Model& model, const tinygltf::Primitive& primitive, const glm::mat4& worldTransform, ModelAsset& asset) {
@@ -200,6 +248,12 @@ namespace {
             normalAccessor = &GetAccessor(model, normalAttribute->second);
         }
 
+        const auto texCoordAttribute = primitive.attributes.find("TEXCOORD_0");
+        const tinygltf::Accessor* texCoordAccessor{nullptr};
+        if (texCoordAttribute != primitive.attributes.end()) {
+            texCoordAccessor = &GetAccessor(model, texCoordAttribute->second);
+        }
+
         const uint32_t vertexOffset = static_cast<uint32_t>(asset.vertices.size());
 
         const glm::mat3 normalTransform = glm::transpose(glm::inverse(glm::mat3(worldTransform)));
@@ -210,25 +264,23 @@ namespace {
             AssetVertex vertex{};
 
             const glm::vec3 position =
-                    ReadPosition(
-                        model,
-                        positionAccessor,
-                        vertexIndex
-                    );
+                    ReadPosition(model, positionAccessor, vertexIndex);
 
             vertex.position = glm::vec3(worldTransform * glm::vec4(position, 1.0f));
 
             if (normalAccessor != nullptr) {
                 vertex.normal = glm::normalize(
                     normalTransform *
-                    ReadNormal(
-                        model,
-                        *normalAccessor,
-                        vertexIndex
-                    )
+                    ReadNormal(model, *normalAccessor, vertexIndex)
                 );
             } else {
                 vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            }
+
+            if (texCoordAccessor != nullptr) {
+                vertex.uv = ReadTexCoord(model, *texCoordAccessor, vertexIndex);
+            } else {
+                vertex.uv = glm::vec2(0.0f);
             }
 
             asset.vertices.push_back(vertex);
@@ -259,7 +311,7 @@ namespace {
             }
         }
 
-        const uint32_t materialIndex = GetMaterialIndex(primitive,asset.materials.size());
+        const uint32_t materialIndex = GetMaterialIndex(primitive, asset.materials.size());
 
         asset.primitives.push_back({
             .firstIndex = firstIndex,
@@ -370,18 +422,14 @@ AssetHandle AssetManager::ImportModel(const std::filesystem::path& path) {
     ModelAsset asset;
     asset.sourcePath = path;
 
-    asset.materials.push_back({
-        .baseColorFactor = glm::vec4(1.0f)
-    });
+    asset.materials.push_back(AssetMaterial{});
 
     asset.materials.reserve(
         asset.materials.size() + model.materials.size()
     );
 
     for (const tinygltf::Material& sourceMaterial : model.materials) {
-        AssetMaterial material{
-            .baseColorFactor = glm::vec4(1.0f)
-        };
+        AssetMaterial material{};
 
         const auto& factor = sourceMaterial.pbrMetallicRoughness.baseColorFactor;
 
@@ -392,6 +440,23 @@ AssetHandle AssetManager::ImportModel(const std::filesystem::path& path) {
                 static_cast<float>(factor.at(2)),
                 static_cast<float>(factor.at(3))
             );
+        }
+
+        const int textureIndex = sourceMaterial.pbrMetallicRoughness.baseColorTexture.index;
+
+        if (textureIndex >= 0) {
+            if (std::cmp_greater_equal(textureIndex, model.textures.size())) {
+                throw std::runtime_error("glTF material texture index out of bounds");
+            };
+
+            const tinygltf::Texture& texture = model.textures.at(static_cast<size_t>(textureIndex));
+
+            if (texture.source < 0 || std::cmp_greater_equal(texture.source, model.images.size())) {
+                throw std::runtime_error("glTF texture has an invalid image source");
+            }
+
+            const int imageIndex = texture.source;
+            material.baseColorTexture = LoadTexture(path, model.images.at(imageIndex), imageIndex, textures_, loadedTextures_);
         }
 
         asset.materials.push_back(material);

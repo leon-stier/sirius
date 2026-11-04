@@ -15,10 +15,15 @@
 #include "input/input_manager.h"
 
 void Flight::Init() {
-    levelInstance_ = sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
-    planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/plane.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
+    // levelInstance_ = sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
+    // planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/plane.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
 
-    sirius::InputManager::Subscribe([this](const sirius::InputEvent& e) { ProcessInputEvent(e); });
+    for (int i = 0; i < 20; i++) {
+        for (int j = 0; j < 20; j++) {
+            planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/cube.glb", glm::translate(glm::mat4(1.0f), glm::vec3(i * 2.5f, 0.0f, j * 2.5f)));
+        }
+    }
+    // sirius::InputManager::Subscribe([this](const sirius::InputEvent& e) { ProcessInputEvent(e); });
 }
 
 void Flight::StartRun() {

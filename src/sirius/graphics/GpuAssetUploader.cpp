@@ -5,7 +5,6 @@
 #include "vulkanContext.h"
 
 namespace sirius {
-
 vk::VertexInputBindingDescription GpuVertex::GetBindingDescription() {
     return {
         .binding = 0,
@@ -15,20 +14,22 @@ vk::VertexInputBindingDescription GpuVertex::GetBindingDescription() {
 }
 
 std::array<vk::VertexInputAttributeDescription, 2> GpuVertex::GetAttributeDescriptions() {
-    return {{
+    return {
         {
-            .location = 0,
-            .binding = 0,
-            .format = vk::Format::eR32G32B32Sfloat,
-            .offset = offsetof(GpuVertex, position)
-        },
-        {
-            .location = 1,
-            .binding = 0,
-            .format = vk::Format::eR32G32B32Sfloat,
-            .offset = offsetof(GpuVertex, normal)
+            {
+                .location = 0,
+                .binding = 0,
+                .format = vk::Format::eR32G32B32Sfloat,
+                .offset = offsetof(GpuVertex, position)
+            },
+            {
+                .location = 1,
+                .binding = 0,
+                .format = vk::Format::eR32G32B32Sfloat,
+                .offset = offsetof(GpuVertex, normal)
+            }
         }
-    }};
+    };
 }
 
 void GpuAssetUploader::Init(VulkanContext& context) {
@@ -145,45 +146,21 @@ void GpuAssetUploader::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBu
 void GpuAssetUploader::RebuildBuffers() {
     context_->Device().waitIdle();
 
-    auto [newVertexBuffer, newVertexMemory] = CreateBuffer(
-        sizeof(GpuVertex) * vertices_.size(),
-        vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
-        vk::MemoryPropertyFlagBits::eDeviceLocal
-    );
-    auto [vertexStaging, vertexStagingMemory] = CreateBuffer(
-        sizeof(GpuVertex) * vertices_.size(),
-        vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-    );
+    auto [newVertexBuffer, newVertexMemory] = CreateBuffer(sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    auto [vertexStaging, vertexStagingMemory] = CreateBuffer(sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     void* vertexData = vertexStagingMemory.mapMemory(0, sizeof(GpuVertex) * vertices_.size());
     std::memcpy(vertexData, vertices_.data(), sizeof(GpuVertex) * vertices_.size());
     vertexStagingMemory.unmapMemory();
 
-    auto [newIndexBuffer, newIndexMemory] = CreateBuffer(
-        sizeof(uint32_t) * indices_.size(),
-        vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-        vk::MemoryPropertyFlagBits::eDeviceLocal
-    );
-    auto [indexStaging, indexStagingMemory] = CreateBuffer(
-        sizeof(uint32_t) * indices_.size(),
-        vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-    );
+    auto [newIndexBuffer, newIndexMemory] = CreateBuffer(sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    auto [indexStaging, indexStagingMemory] = CreateBuffer(sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     void* indexData = indexStagingMemory.mapMemory(0, sizeof(uint32_t) * indices_.size());
     std::memcpy(indexData, indices_.data(), sizeof(uint32_t) * indices_.size());
     indexStagingMemory.unmapMemory();
 
     auto commandBuffer = BeginSingleTimeCommands();
-    commandBuffer.copyBuffer(
-        *vertexStaging,
-        *newVertexBuffer,
-        vk::BufferCopy{.size = sizeof(GpuVertex) * vertices_.size()}
-    );
-    commandBuffer.copyBuffer(
-        *indexStaging,
-        *newIndexBuffer,
-        vk::BufferCopy{.size = sizeof(uint32_t) * indices_.size()}
-    );
+    commandBuffer.copyBuffer(*vertexStaging, *newVertexBuffer, vk::BufferCopy{.size = sizeof(GpuVertex) * vertices_.size()});
+    commandBuffer.copyBuffer(*indexStaging, *newIndexBuffer, vk::BufferCopy{.size = sizeof(uint32_t) * indices_.size()});
     EndSingleTimeCommands(std::move(commandBuffer));
 
     vertexBuffer_ = std::move(newVertexBuffer);
@@ -191,5 +168,4 @@ void GpuAssetUploader::RebuildBuffers() {
     indexBuffer_ = std::move(newIndexBuffer);
     indexMemory_ = std::move(newIndexMemory);
 }
-
 }

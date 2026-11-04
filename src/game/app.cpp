@@ -40,6 +40,7 @@ Fsm::FsmReturn App::Init() {
     game = Flight{};
     game.Init();
 
+    std::cout << "Finished initializing" << std::endl;
     SetState(kRunGame);
     return kContinue;
 }

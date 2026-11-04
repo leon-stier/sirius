@@ -18,7 +18,7 @@ struct PhysicalDeviceRequirements {
     };
 
     static constexpr vk::PhysicalDeviceFeatures2 requiredCoreFeatures{
-        .features = {.samplerAnisotropy = vk::True}
+        .features = {.geometryShader = vk::True, .samplerAnisotropy = vk::True}
     };
 
     static constexpr auto requiredFeatures = std::make_tuple(
