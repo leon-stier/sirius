@@ -4,6 +4,7 @@
 
 #pragma once
 #include "gameState.h"
+#include "IGame.h"
 #include "graphics/renderWorld.h"
 
 
@@ -11,11 +12,11 @@ namespace sirius {
 struct InputEvent;
 }
 
-class Flight {
+class Flight : public IGame {
 public:
-    void Init();
+    void Init() override;
     void StartRun();
-    void Update(float deltaTime);
+    void Update() override;
     void EndRun();
 
 private:
@@ -25,4 +26,5 @@ private:
 
     sirius::RenderInstanceHandle levelInstance_;
     sirius::RenderInstanceHandle planeInstance_;
+    std::vector<sirius::RenderInstanceHandle> cubes_;
 };

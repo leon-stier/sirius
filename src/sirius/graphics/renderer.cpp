@@ -1,6 +1,7 @@
 #include "renderer.h"
 
 #include "vkRenderer.h"
+#include <print>
 
 namespace sirius {
 
@@ -25,7 +26,11 @@ void Renderer::DestroyInstance(const RenderInstanceHandle handle) {
 }
 
 void Renderer::SetInstanceTransform(const RenderInstanceHandle handle, const glm::mat4& transform) {
-    vkRenderer_.SetInstanceTransform(handle, transform);
+    try {
+        vkRenderer_.SetInstanceTransform(handle, transform);
+    } catch (const std::exception e) {
+        std::println("SetInstanceTransform threw an exception: {}", e.what());
+    }
 }
 
 }

@@ -9,27 +9,24 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
+#include <random>
 #include <glm/gtx/quaternion.hpp>
 
 #include "graphics/renderer.h"
 #include "input/input_manager.h"
 
 void Flight::Init() {
-    // levelInstance_ = sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
-    // planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/plane.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
+    levelInstance_ = sirius::Renderer::LoadModelInstance("../../resources/tree.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
+    planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/plane.glb", glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)));
 
-    for (int i = 0; i < 20; i++) {
-        for (int j = 0; j < 20; j++) {
-            planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/cubeTextured.glb", glm::translate(glm::mat4(1.0f), glm::vec3(i * 2.5f, 0.0f, j * 2.5f)));
-        }
-    }
+
     // sirius::InputManager::Subscribe([this](const sirius::InputEvent& e) { ProcessInputEvent(e); });
 }
 
 void Flight::StartRun() {
 }
 
-void Flight::Update(float deltaTime) {
+void Flight::Update() {
     glm::quat pitchRotation = glm::angleAxis(planeState_.pitch, glm::vec3 { 1.f, 0.f, 0.f });
     glm::quat rollRotation = glm::angleAxis(planeState_.roll + planeState_.rollSpeed, glm::vec3 { 0.f, 0.f, 1.f });
     auto rotation = glm::toMat4(rollRotation * pitchRotation);

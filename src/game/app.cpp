@@ -5,6 +5,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "TestGame.h"
 #include "graphics/renderer.h"
 #include "input/input_manager.h"
 #include "window/window.h"
@@ -37,8 +38,10 @@ Fsm::FsmReturn App::Init() {
     }
     sirius::InputManager::Init();
 
-    game = Flight{};
-    game.Init();
+    // game = Flight{};
+    // game.Init();
+    game_ = std::make_unique<Flight>();
+    game_->Init();
 
     std::cout << "Finished initializing" << std::endl;
     SetState(kRunGame);
@@ -65,7 +68,7 @@ Fsm::FsmReturn App::RunGame() {
         return kContinue;
     }
     sirius::InputManager::Notify();
-    game.Update(1);
+    game_->Update();
     sirius::Renderer::Draw();
     return kContinue;
 }

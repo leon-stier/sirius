@@ -26,6 +26,6 @@ public:
 protected:
     FsmReturn UpdateState(signed short state) override;
 private:
-    Flight game;
+    std::unique_ptr<IGame> game_;
     bool isSystemInitialized_ = false;
 };
