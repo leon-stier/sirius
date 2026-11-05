@@ -20,7 +20,7 @@ void Flight::Init() {
 
     for (int i = 0; i < 20; i++) {
         for (int j = 0; j < 20; j++) {
-            planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/cube.glb", glm::translate(glm::mat4(1.0f), glm::vec3(i * 2.5f, 0.0f, j * 2.5f)));
+            planeInstance_ = sirius::Renderer::LoadModelInstance("../../resources/cubeTextured.glb", glm::translate(glm::mat4(1.0f), glm::vec3(i * 2.5f, 0.0f, j * 2.5f)));
         }
     }
     // sirius::InputManager::Subscribe([this](const sirius::InputEvent& e) { ProcessInputEvent(e); });

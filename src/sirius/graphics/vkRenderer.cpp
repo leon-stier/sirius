@@ -6,6 +6,8 @@
 #include <ranges>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "vulkanUtils.h"
+
 namespace sirius {
 void VkRenderer::Init(VulkanContext& context) {
     context_ = &context;
@@ -40,8 +42,9 @@ RenderInstanceHandle VkRenderer::LoadModelInstance(const std::filesystem::path& 
     if (const auto it = uploadedAssets_.find(cpuHandle.value); it != uploadedAssets_.end()) {
         gpuHandle = it->second;
     } else {
-        gpuHandle = assetUploader_.Upload(assetManager_.Get(cpuHandle));
+        gpuHandle = assetUploader_.Upload(assetManager_.Get(cpuHandle), assetManager_);
         uploadedAssets_.emplace(cpuHandle.value, gpuHandle);
+        CreateMaterialDescriptorSets(gpuHandle);
     }
     return renderWorld_.CreateInstance(gpuHandle, transform);
 }
@@ -171,25 +174,8 @@ void VkRenderer::CreateImageViews() {
     swapChainImageViews_.reserve(swapChainImages_.size());
 
     for (const auto& image : swapChainImages_) {
-        swapChainImageViews_.emplace_back(CreateImageView(image, swapChainSurfaceFormat_.surfaceFormat.format, vk::ImageAspectFlagBits::eColor));
+        swapChainImageViews_.emplace_back(VulkanUtils::CreateImageView(*context_, image, swapChainSurfaceFormat_.surfaceFormat.format, vk::ImageAspectFlagBits::eColor));
     }
-}
-
-vk::raii::ImageView VkRenderer::CreateImageView(vk::Image const& image, const vk::Format format, const vk::ImageAspectFlags aspectFlags) const {
-    const vk::ImageViewCreateInfo viewCreateInfo{
-        .image = image,
-        .viewType = vk::ImageViewType::e2D,
-        .format = format,
-        .subresourceRange = {
-            .aspectMask = aspectFlags,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-
-    return vk::raii::ImageView(context_->Device(), viewCreateInfo);
 }
 
 void VkRenderer::CreateDescriptorSetLayout() {
@@ -206,6 +192,73 @@ void VkRenderer::CreateDescriptorSetLayout() {
     };
 
     descriptorSetLayout_ = vk::raii::DescriptorSetLayout(context_->Device(), layoutCreateInfo);
+
+    constexpr vk::DescriptorSetLayoutBinding textureBinding{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eSampledImage,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    };
+    constexpr vk::DescriptorSetLayoutBinding samplerBinding{
+        .binding = 1,
+        .descriptorType = vk::DescriptorType::eSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    };
+    constexpr std::array materialBindings{textureBinding, samplerBinding};
+    const vk::DescriptorSetLayoutCreateInfo materialLayoutInfo{
+        .bindingCount = static_cast<uint32_t>(materialBindings.size()),
+        .pBindings = materialBindings.data()
+    };
+    materialDescriptorSetLayout_ = vk::raii::DescriptorSetLayout(context_->Device(), materialLayoutInfo);
+}
+
+void VkRenderer::CreateMaterialDescriptorSets(const GpuAssetHandle handle) {
+    const GpuAsset& asset = assetUploader_.Get(handle);
+    std::vector layouts(asset.materials.size(), *materialDescriptorSetLayout_);
+    const vk::DescriptorSetAllocateInfo allocInfo{
+        .descriptorPool = descriptorPool_,
+        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+        .pSetLayouts = layouts.data()
+    };
+
+    auto descriptorSets = context_->Device().allocateDescriptorSets(allocInfo);
+    std::vector<vk::raii::DescriptorSet> materialSets;
+    materialSets.reserve(descriptorSets.size());
+
+    for (size_t materialIndex = 0; materialIndex < descriptorSets.size(); ++materialIndex) {
+        materialSets.push_back(std::move(descriptorSets.at(materialIndex)));
+        const uint32_t textureIndex = asset.baseColorTextureIndices.at(materialIndex);
+        const vk::DescriptorImageInfo imageInfo{
+            .sampler = nullptr,
+            .imageView = assetUploader_.Textures().at(textureIndex).view,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+        };
+        const vk::DescriptorImageInfo samplerInfo{
+            .sampler = assetUploader_.TextureSampler(),
+            .imageView = nullptr,
+            .imageLayout = vk::ImageLayout::eUndefined
+        };
+        const std::array writes{
+            vk::WriteDescriptorSet{
+                .dstSet = *materialSets.back(),
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eSampledImage,
+                .pImageInfo = &imageInfo
+            },
+            vk::WriteDescriptorSet{
+                .dstSet = *materialSets.back(),
+                .dstBinding = 1,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eSampler,
+                .pImageInfo = &samplerInfo
+            }
+        };
+        context_->Device().updateDescriptorSets(writes, {});
+    }
+
+    materialDescriptorSets_.push_back(std::move(materialSets));
 }
 
 void VkRenderer::CreateGraphicsPipeline() {
@@ -299,9 +352,10 @@ void VkRenderer::CreateGraphicsPipeline() {
         .size = sizeof(DrawConstants)
     };
 
+    const std::array setLayouts{*descriptorSetLayout_, *materialDescriptorSetLayout_};
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo{
-        .setLayoutCount = 1,
-        .pSetLayouts = &*descriptorSetLayout_,
+        .setLayoutCount = 2,
+        .pSetLayouts = setLayouts.data(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &drawConstantsRange
     };
@@ -357,32 +411,6 @@ void VkRenderer::InitCommandBuffers() {
     ephemeralCommandPool_ = vk::raii::CommandPool(context_->Device(), poolCreateInfo);
 }
 
-std::pair<vk::raii::Image, vk::raii::DeviceMemory> VkRenderer::CreateImage(const uint32_t width, const uint32_t height, const vk::Format format, const vk::ImageTiling tiling, const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties) const {
-    const vk::ImageCreateInfo imageInfo{
-        .imageType = vk::ImageType::e2D,
-        .format = format,
-        .extent = {.width = width, .height = height, .depth = 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = tiling,
-        .usage = usage,
-        .sharingMode = vk::SharingMode::eExclusive
-    };
-
-    auto image = vk::raii::Image(context_->Device(), imageInfo);
-
-    const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
-    const vk::MemoryAllocateInfo allocInfo{
-        .allocationSize = memRequirements.size,
-        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
-    };
-    auto imageMemory = vk::raii::DeviceMemory(context_->Device(), allocInfo);
-    image.bindMemory(imageMemory, 0);
-
-    return {std::move(image), std::move(imageMemory)};
-}
-
 vk::Format VkRenderer::FindSupportedFormat(const std::vector<vk::Format>& candidates, const vk::ImageTiling tiling, const vk::FormatFeatureFlags features) const {
     for (const auto format : candidates) {
         vk::FormatProperties2 props = context_->PhysicalDevice().getFormatProperties2(format);
@@ -405,8 +433,8 @@ vk::Format VkRenderer::FindDepthFormat() const {
 void VkRenderer::CreateDepthResources() {
     const vk::Format depthFormat = FindDepthFormat();
 
-    std::tie(depthImage_, depthImageMemory_) = CreateImage(swapChainExtent_.width, swapChainExtent_.height, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    depthImageView_ = CreateImageView(depthImage_, depthFormat, vk::ImageAspectFlagBits::eDepth);
+    std::tie(depthImage_, depthImageMemory_) = VulkanUtils::CreateImage(*context_, swapChainExtent_.width, swapChainExtent_.height, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    depthImageView_ = VulkanUtils::CreateImageView(*context_, depthImage_, depthFormat, vk::ImageAspectFlagBits::eDepth);
 }
 
 void VkRenderer::CreateSyncObjects() {
@@ -432,7 +460,7 @@ void VkRenderer::CreateSyncObjects() {
 void VkRenderer::CreateUniformBuffers() {
     for (auto& frame : frames_) {
         constexpr vk::DeviceSize bufferSize = sizeof(FrameUniforms);
-        auto [buffer, bufferMem] = CreateBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        auto [buffer, bufferMem] = VulkanUtils::CreateBuffer(*context_, bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         frame.uniformBuffer = std::move(buffer);
         frame.uniformBufferMemory = std::move(bufferMem);
         frame.uniformBufferMapped = frame.uniformBufferMemory.mapMemory(0, bufferSize);
@@ -440,15 +468,26 @@ void VkRenderer::CreateUniformBuffers() {
 }
 
 void VkRenderer::CreateDescriptorPool() {
-    constexpr vk::DescriptorPoolSize poolSize{
-        .type = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = kMaxFramesInFlight
+    constexpr uint32_t maxMaterialDescriptorSets = 4096;
+    constexpr std::array poolSizes{
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = kMaxFramesInFlight
+        },
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eSampledImage,
+            .descriptorCount = maxMaterialDescriptorSets
+        },
+        vk::DescriptorPoolSize{
+            .type = vk::DescriptorType::eSampler,
+            .descriptorCount = maxMaterialDescriptorSets
+        }
     };
     const vk::DescriptorPoolCreateInfo poolCreateInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = kMaxFramesInFlight,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
+        .maxSets = kMaxFramesInFlight + maxMaterialDescriptorSets,
+        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+        .pPoolSizes = poolSizes.data()
     };
     descriptorPool_ = vk::raii::DescriptorPool(context_->Device(), poolCreateInfo);
 }
@@ -482,31 +521,12 @@ void VkRenderer::CreateDescriptorSets() {
     }
 }
 
-std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> VkRenderer::CreateBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags bufferUsage, const vk::MemoryPropertyFlags memoryProperties) const {
-    const vk::BufferCreateInfo bufferInfo{
-        .size = size,
-        .usage = bufferUsage,
-        .sharingMode = vk::SharingMode::eExclusive
-    };
-    auto buffer = vk::raii::Buffer(context_->Device(), bufferInfo);
-
-    const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
-    const vk::MemoryAllocateInfo memoryAllocateInfo{
-        .allocationSize = memRequirements.size,
-        .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, memoryProperties)
-    };
-    auto bufferMemory{vk::raii::DeviceMemory(context_->Device(), memoryAllocateInfo)};
-    buffer.bindMemory(bufferMemory, 0);
-
-    return {std::move(buffer), std::move(bufferMemory)};
-}
-
 void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t currentFrameIndex) const {
     auto& buffer = frames_.at(currentFrameIndex).commandBuffer;
     buffer.begin({});
 
     // Transition the image layout for rendering
-    TransitionImageLayout(
+    VulkanUtils::TransitionImageLayout(
         swapChainImages_[imageIndex],
         frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eUndefined,
@@ -519,7 +539,7 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     );
 
     // Transition the depth image to depth attachment optimal layout
-    TransitionImageLayout(
+    VulkanUtils::TransitionImageLayout(
         *depthImage_,
         frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eUndefined,
@@ -572,7 +592,13 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
     buffer.setViewport(0, vk::Viewport(0.0f, static_cast<float>(swapChainExtent_.height), static_cast<float>(swapChainExtent_.width), -static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f)); // Inverted height because glm and Vulkan disagree where down is
     buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
-    buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, *frames_.at(currentFrameIndex).descriptorSet, nullptr);
+    buffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        pipelineLayout_,
+        0,
+        *frames_.at(currentFrameIndex).descriptorSet,
+        nullptr
+    );
 
     if (assetUploader_.HasBuffers()) {
         buffer.bindVertexBuffers(0, assetUploader_.VertexBuffer(), {0});
@@ -584,6 +610,13 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
         const GpuAsset& asset = assetUploader_.Get(item.asset);
         for (const GpuPrimitive& primitive : asset.primitives) {
             const AssetMaterial& material = asset.materials.at(primitive.materialIndex);
+            buffer.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                pipelineLayout_,
+                1,
+                *materialDescriptorSets_.at(item.asset.value).at(primitive.materialIndex),
+                nullptr
+            );
 
             const DrawConstants constants{
                 .model = item.transform,
@@ -606,7 +639,7 @@ void VkRenderer::RecordCommandBuffer(const uint32_t imageIndex, const uint32_t c
     buffer.endRendering();
 
     // Transition the image layout for presentation
-    TransitionImageLayout(
+    VulkanUtils::TransitionImageLayout(
         swapChainImages_[imageIndex],
         frames_.at(currentFrameIndex).commandBuffer,
         vk::ImageLayout::eColorAttachmentOptimal,
@@ -763,99 +796,9 @@ void VkRenderer::ProcessCameraEvent(const InputEvent event) {
 }
 
 
-void VkRenderer::TransitionImageLayout(
-    const vk::Image image,
-    const vk::raii::CommandBuffer& commandBuffer,
-    const vk::ImageLayout oldLayout,
-    const vk::ImageLayout newLayout,
-    const vk::AccessFlags2 srcAccessMask,
-    const vk::AccessFlags2 dstAccessMask,
-    const vk::PipelineStageFlags2 srcStageMask,
-    const vk::PipelineStageFlags2 dstStageMask,
-    const vk::ImageAspectFlags imageAspectFlags) const {
-    vk::ImageMemoryBarrier2 barrier = {
-        .srcStageMask = srcStageMask,
-        .srcAccessMask = srcAccessMask,
-        .dstStageMask = dstStageMask,
-        .dstAccessMask = dstAccessMask,
-        .oldLayout = oldLayout,
-        .newLayout = newLayout,
-        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .image = image,
-        .subresourceRange = {
-            .aspectMask = imageAspectFlags,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-
-    const vk::DependencyInfo dependencyInfo = {
-        .dependencyFlags = {},
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &barrier
-    };
-
-    commandBuffer.pipelineBarrier2(dependencyInfo);
-}
-
-
-/*
- * Find a memory type for the buffer that is both supported and works for our application
- * typeFilter specifies suitable memory types by setting their corresponding bit to 1
- * So to find the indices of suitable types, we just iterate over all and check if their bit is set to 1
- * memoryProperties.MemoryTypes contains vk::MemoryType structs that specify the heap and properties of each memory type
- * We check those against the specified properties we need for the buffer
- * So only a type that's suitable (bit set to 1) and fits our required properties is selected
- */
-uint32_t VkRenderer::FindMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
-    const vk::PhysicalDeviceMemoryProperties2 memoryProperties{context_->PhysicalDevice().getMemoryProperties2()};
-
-    for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
-        if (typeFilter & (1 << i) && (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("No suitable memory type found");
-}
-
 void VkRenderer::CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, const vk::DeviceSize size) const {
-    vk::raii::CommandBuffer commandCopyBuffer = BeginSingleTimeCommands();
+    vk::raii::CommandBuffer commandCopyBuffer = VulkanUtils::BeginSingleTimeCommands(*context_, ephemeralCommandPool_);
     commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy{.size = size});
-    EndSingleTimeCommands(std::move(commandCopyBuffer));
-}
-
-vk::raii::CommandBuffer VkRenderer::BeginSingleTimeCommands() const {
-    const vk::CommandBufferAllocateInfo allocateInfo{
-        .commandPool = ephemeralCommandPool_,
-        .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = 1,
-    };
-    vk::raii::CommandBuffer commandBuffer = std::move(context_->Device().allocateCommandBuffers(allocateInfo).front());
-
-    commandBuffer.begin({
-        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-    });
-
-    return std::move(commandBuffer);
-}
-
-void VkRenderer::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const {
-    commandBuffer.end();
-
-    const vk::CommandBufferSubmitInfo commandBufferSubmitInfo{
-        .commandBuffer = *commandBuffer
-    };
-
-    const vk::SubmitInfo2 submitInfo{
-        .commandBufferInfoCount = 1,
-        .pCommandBufferInfos = &commandBufferSubmitInfo
-    };
-
-    context_->GraphicsQueue().submit2(submitInfo, nullptr);
-    context_->GraphicsQueue().waitIdle();
+    VulkanUtils::EndSingleTimeCommands(*context_, std::move(commandCopyBuffer));
 }
 }

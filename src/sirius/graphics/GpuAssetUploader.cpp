@@ -1,8 +1,9 @@
-#include "GpuAssetUploader.h"
+#include "gpuAssetUploader.h"
 
 #include <stdexcept>
 
 #include "vulkanContext.h"
+#include "vulkanUtils.h"
 
 namespace sirius {
 vk::VertexInputBindingDescription GpuVertex::GetBindingDescription() {
@@ -47,6 +48,11 @@ void GpuAssetUploader::Init(VulkanContext& context) {
     };
     commandPool_ = vk::raii::CommandPool(context.Device(), poolInfo);
 
+    const auto properties = context.PhysicalDevice().getProperties2().properties;
+    const float maxAnisotropy =
+            properties.limits.maxSamplerAnisotropy < 16.0f
+                ? properties.limits.maxSamplerAnisotropy
+                : 16.0f;
     const vk::SamplerCreateInfo samplerCreateInfo{
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
@@ -54,25 +60,25 @@ void GpuAssetUploader::Init(VulkanContext& context) {
         .addressModeU = vk::SamplerAddressMode::eRepeat,
         .addressModeV = vk::SamplerAddressMode::eRepeat,
         .addressModeW = vk::SamplerAddressMode::eRepeat,
-        .anisotropyEnable = vk::True,
-        .maxAnisotropy = 16.0f,
+        .anisotropyEnable = maxAnisotropy > 1.0f ? vk::True : vk::False,
+        .maxAnisotropy = maxAnisotropy,
         .minLod = 0.0f,
         .maxLod = 0.0f
     };
 
     textureSampler_ = vk::raii::Sampler(context.Device(), samplerCreateInfo);
 
-    AssetTexture whiteTexture{
+    const AssetTexture defaultTexture{
         .width = 1,
         .height = 1,
-        .pixels = {255, 255, 255, 255}
+        .pixels = {255, 0, 0, 255}
     };
 
     textures_.push_back({});
-    UploadTextureData(whiteTexture, textures_.front());
+    UploadTextureData(defaultTexture, textures_.front());
 }
 
-GpuAssetHandle GpuAssetUploader::Upload(const ModelAsset& asset) {
+GpuAssetHandle GpuAssetUploader::Upload(const ModelAsset& asset, const AssetManager& assetManager) {
     if (context_ == nullptr) {
         throw std::runtime_error("GPU asset uploader has not been initialized");
     }
@@ -94,13 +100,27 @@ GpuAssetHandle GpuAssetUploader::Upload(const ModelAsset& asset) {
     if (gpuAsset.materials.empty()) {
         gpuAsset.materials.push_back({.baseColorFactor = glm::vec4(1.0f)});
     }
+
+    gpuAsset.baseColorTextureIndices.resize(gpuAsset.materials.size(), 0);
+
+    for (size_t materialIndex = 0; materialIndex < gpuAsset.materials.size(); ++materialIndex) {
+        const AssetMaterial& material = gpuAsset.materials.at(materialIndex);
+
+        if (!material.baseColorTexture.has_value()) {
+            continue;
+        }
+
+        gpuAsset.baseColorTextureIndices.at(materialIndex) = UploadTexture(material.baseColorTexture.value(), assetManager);
+    }
+
+
     gpuAsset.primitives.reserve(asset.primitives.size());
-    for (const AssetPrimitive& primitive : asset.primitives) {
+    for (const auto& [firstIndex, indexCount, primitiveVertexOffset, materialIndex] : asset.primitives) {
         gpuAsset.primitives.push_back({
-            .firstIndex = indexOffset + primitive.firstIndex,
-            .indexCount = primitive.indexCount,
-            .vertexOffset = static_cast<int32_t>(vertexOffset) + primitive.vertexOffset,
-            .materialIndex = primitive.materialIndex < gpuAsset.materials.size() ? primitive.materialIndex : 0
+            .firstIndex = indexOffset + firstIndex,
+            .indexCount = indexCount,
+            .vertexOffset = static_cast<int32_t>(vertexOffset) + primitiveVertexOffset,
+            .materialIndex = materialIndex < gpuAsset.materials.size() ? materialIndex : 0
         });
     }
 
@@ -116,99 +136,124 @@ const GpuAsset& GpuAssetUploader::Get(const GpuAssetHandle handle) const {
     return assets_.at(handle.value);
 }
 
-std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> GpuAssetUploader::CreateBuffer(
-    const vk::DeviceSize size,
-    const vk::BufferUsageFlags usage,
-    const vk::MemoryPropertyFlags properties
-) const {
-    const vk::BufferCreateInfo bufferInfo{
-        .size = size,
-        .usage = usage,
-        .sharingMode = vk::SharingMode::eExclusive
-    };
-    auto buffer = vk::raii::Buffer(context_->Device(), bufferInfo);
-    const vk::MemoryRequirements requirements = buffer.getMemoryRequirements();
-    const vk::MemoryAllocateInfo allocateInfo{
-        .allocationSize = requirements.size,
-        .memoryTypeIndex = FindMemoryType(requirements.memoryTypeBits, properties)
-    };
-    auto memory = vk::raii::DeviceMemory(context_->Device(), allocateInfo);
-    buffer.bindMemory(memory, 0);
-    return {std::move(buffer), std::move(memory)};
-}
-
 void GpuAssetUploader::UploadTextureData(const AssetTexture& texture, GpuTexture& destination) {
-    const size_t expectedSize = static_cast<size_t>(texture.width) * static_cast<size_t>(texture.height) * 4;
-
-    if (texture.width == 0 || texture.height == 0 || texture.pixels.size() != expectedSize) {
-        throw std::runtime_error("Invalid RGBA texture data");
+    if (texture.width == 0 || texture.height == 0) {
+        throw std::runtime_error("Cannot upload a texture with zero dimensions");
     }
 
-    auto [image, imageMemory] = CreateTextureImage(texture.width, texture.height);
+    const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(texture.width) * texture.height * 4;
+    if (texture.pixels.size() != imageSize) {
+        throw std::runtime_error("Texture pixel data is not RGBA8");
+    }
 
-    const vk::DeviceSize byteSize = static_cast<vk::DeviceSize>(texture.pixels.size());
+    auto [image, memory] = CreateTextureImage(texture.width, texture.height);
+    auto [stagingBuffer, stagingMemory] = VulkanUtils::CreateBuffer(*context_, imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
-    auto [stagingBuffer, stagingMemory] = CreateBuffer(byteSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-}
+    void* mapped = stagingMemory.mapMemory(0, imageSize);
+    std::memcpy(mapped, texture.pixels.data(), imageSize);
+    stagingMemory.unmapMemory();
 
-std::pair<vk::raii::Image, vk::raii::DeviceMemory> GpuAssetUploader::CreateTextureImage(uint32_t width, uint32_t height) const {
-}
+    auto commandBuffer = VulkanUtils::BeginSingleTimeCommands(*context_, commandPool_);
+    VulkanUtils::TransitionImageLayout(
+        *image,
+        commandBuffer,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal,
+        {},
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::ImageAspectFlagBits::eColor
+    );
 
-uint32_t GpuAssetUploader::FindMemoryType(
-    const uint32_t typeFilter,
-    const vk::MemoryPropertyFlags properties
-) const {
-    const vk::PhysicalDeviceMemoryProperties2 memoryProperties = context_->PhysicalDevice().getMemoryProperties2();
-    for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; ++i) {
-        if ((typeFilter & (1u << i)) != 0 &&
-            (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
+    commandBuffer.copyBufferToImage(
+        *stagingBuffer,
+        *image,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::BufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {texture.width, texture.height, 1}
         }
+    );
+
+    VulkanUtils::TransitionImageLayout(
+        *image,
+        commandBuffer,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::AccessFlagBits2::eShaderSampledRead,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::ImageAspectFlagBits::eColor
+    );
+    VulkanUtils::EndSingleTimeCommands(*context_, std::move(commandBuffer));
+
+    destination.image = std::move(image);
+    destination.memory = std::move(memory);
+    destination.view = VulkanUtils::CreateImageView(*context_, *destination.image, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+}
+
+std::pair<vk::raii::Image, vk::raii::DeviceMemory> GpuAssetUploader::CreateTextureImage(
+    const uint32_t width,
+    const uint32_t height
+) const {
+    return VulkanUtils::CreateImage(
+        *context_,
+        width,
+        height,
+        vk::Format::eR8G8B8A8Srgb,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        vk::MemoryPropertyFlagBits::eDeviceLocal
+    );
+}
+
+uint32_t GpuAssetUploader::UploadTexture(
+    const TextureHandle handle,
+    const AssetManager& assetManager
+) {
+    if (const auto it = uploadedTextures_.find(handle.value); it != uploadedTextures_.end()) {
+        return it->second;
     }
-    throw std::runtime_error("No suitable memory type found for GPU asset");
+
+    GpuTexture texture;
+    UploadTextureData(assetManager.Get(handle), texture);
+    textures_.push_back(std::move(texture));
+    const uint32_t index = static_cast<uint32_t>(textures_.size() - 1);
+    uploadedTextures_.emplace(handle.value, index);
+    return index;
 }
 
-vk::raii::CommandBuffer GpuAssetUploader::BeginSingleTimeCommands() const {
-    const vk::CommandBufferAllocateInfo allocateInfo{
-        .commandPool = commandPool_,
-        .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = 1
-    };
-    auto commandBuffer = std::move(context_->Device().allocateCommandBuffers(allocateInfo).front());
-    commandBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    return commandBuffer;
-}
-
-void GpuAssetUploader::EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const {
-    commandBuffer.end();
-    const vk::CommandBufferSubmitInfo commandInfo{.commandBuffer = *commandBuffer};
-    const vk::SubmitInfo2 submitInfo{
-        .commandBufferInfoCount = 1,
-        .pCommandBufferInfos = &commandInfo
-    };
-    context_->GraphicsQueue().submit2(submitInfo, nullptr);
-    context_->GraphicsQueue().waitIdle();
-}
 
 void GpuAssetUploader::RebuildBuffers() {
     context_->Device().waitIdle();
 
-    auto [newVertexBuffer, newVertexMemory] = CreateBuffer(sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    auto [vertexStaging, vertexStagingMemory] = CreateBuffer(sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    auto [newVertexBuffer, newVertexMemory] = VulkanUtils::CreateBuffer(*context_, sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    auto [vertexStaging, vertexStagingMemory] = VulkanUtils::CreateBuffer(*context_, sizeof(GpuVertex) * vertices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     void* vertexData = vertexStagingMemory.mapMemory(0, sizeof(GpuVertex) * vertices_.size());
     std::memcpy(vertexData, vertices_.data(), sizeof(GpuVertex) * vertices_.size());
     vertexStagingMemory.unmapMemory();
 
-    auto [newIndexBuffer, newIndexMemory] = CreateBuffer(sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    auto [indexStaging, indexStagingMemory] = CreateBuffer(sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    auto [newIndexBuffer, newIndexMemory] = VulkanUtils::CreateBuffer(*context_, sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    auto [indexStaging, indexStagingMemory] = VulkanUtils::CreateBuffer(*context_, sizeof(uint32_t) * indices_.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     void* indexData = indexStagingMemory.mapMemory(0, sizeof(uint32_t) * indices_.size());
     std::memcpy(indexData, indices_.data(), sizeof(uint32_t) * indices_.size());
     indexStagingMemory.unmapMemory();
 
-    auto commandBuffer = BeginSingleTimeCommands();
+    auto commandBuffer = VulkanUtils::BeginSingleTimeCommands(*context_, commandPool_);
     commandBuffer.copyBuffer(*vertexStaging, *newVertexBuffer, vk::BufferCopy{.size = sizeof(GpuVertex) * vertices_.size()});
     commandBuffer.copyBuffer(*indexStaging, *newIndexBuffer, vk::BufferCopy{.size = sizeof(uint32_t) * indices_.size()});
-    EndSingleTimeCommands(std::move(commandBuffer));
+    VulkanUtils::EndSingleTimeCommands(*context_, std::move(commandBuffer));
 
     vertexBuffer_ = std::move(newVertexBuffer);
     vertexMemory_ = std::move(newVertexMemory);

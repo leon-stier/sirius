@@ -5,7 +5,7 @@
 
 #include <glm/mat4x4.hpp>
 
-#include "GpuAssetUploader.h"
+#include "gpuAssetUploader.h"
 
 namespace sirius {
 

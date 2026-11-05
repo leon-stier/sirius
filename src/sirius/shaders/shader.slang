@@ -3,6 +3,7 @@
 struct VSInput {
     float3 inPosition;
     float3 inNormal;
+    float2 inUv;
 };
 
 struct FrameUniforms {
@@ -10,11 +11,19 @@ struct FrameUniforms {
     float4x4 projection;
 }
 
+[[vk::binding(0, 0)]]
 ConstantBuffer<FrameUniforms> frame;
+
+[[vk::binding(0, 1)]]
+Texture2D<float4> baseColorTexture;
+
+[[vk::binding(1, 1)]]
+SamplerState baseColorSampler;
 
 struct VSOutput {
     float4 pos : SV_Position;
     float3 normal;
+    float2 uv;
 };
 
 struct DrawConstants {
@@ -37,21 +46,12 @@ VSOutput vertMain(VSInput input) {
     output.pos = mul(frame.projection, viewPosition);
 
     output.normal = input.inNormal;
+    output.uv = input.inUv;
 
     return output;
 }
 
 [shader("fragment")]
-float4 fragMain(VSOutput vertIn, uint primitiveID : SV_PrimitiveId) : SV_TARGET {
-    float3 colorList[6] = {
-        float3(1.0, 0.0, 0.0), // Red
-        float3(0.0, 1.0, 0.0), // Green
-        float3(0.0, 0.0, 1.0), // Blue
-        float3(1.0, 1.0, 0.0), // Yellow
-        float3(1.0, 0.0, 1.0), // Magenta
-        float3(0.0, 1.0, 1.0)  // Cyan
-    };
-   //return draw.baseColor;
-   float3 col = colorList[primitiveID / 2];
-   return float4(col, 1.0);
+float4 fragMain(VSOutput vertIn) : SV_TARGET {
+    return baseColorTexture.Sample(baseColorSampler, vertIn.uv);// * draw.baseColor;
 }

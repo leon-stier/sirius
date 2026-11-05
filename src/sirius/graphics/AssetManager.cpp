@@ -1,4 +1,4 @@
-#include "AssetManager.h"
+#include "assetManager.h"
 
 #include <iostream>
 
@@ -216,10 +216,42 @@ namespace {
             throw std::runtime_error("glTF texture has no decoded pixel data in " + modelPath.string());
         }
 
+        std::vector<uint8_t> pixels;
+        pixels.resize(static_cast<size_t>(source.width) * source.height * 4);
+        for (size_t i = 0; i < static_cast<size_t>(source.width) * source.height; ++i) {
+            const size_t sourceOffset = i * static_cast<size_t>(source.component);
+            const size_t destinationOffset = i * 4;
+            switch (source.component) {
+                case 1: // Grayscale
+                    pixels[destinationOffset + 0] = source.image[sourceOffset];
+                    pixels[destinationOffset + 1] = source.image[sourceOffset];
+                    pixels[destinationOffset + 2] = source.image[sourceOffset];
+                    pixels[destinationOffset + 3] = 255;
+                    break;
+                case 2: // Grayscale + Alpha
+                    pixels[destinationOffset + 0] = source.image[sourceOffset];
+                    pixels[destinationOffset + 1] = source.image[sourceOffset];
+                    pixels[destinationOffset + 2] = source.image[sourceOffset];
+                    pixels[destinationOffset + 3] = source.image[sourceOffset + 1];
+                    break;
+                case 3: // RGB
+                    pixels[destinationOffset + 0] = source.image[sourceOffset + 0];
+                    pixels[destinationOffset + 1] = source.image[sourceOffset + 1];
+                    pixels[destinationOffset + 2] = source.image[sourceOffset + 2];
+                    pixels[destinationOffset + 3] = 255;
+                    break;
+                case 4: // RGB + Alpha
+                    std::memcpy(pixels.data() + destinationOffset, source.image.data() + sourceOffset, 4);
+                    break;
+                default:
+                    throw std::runtime_error("Unsupported glTF texture component count");
+            }
+        }
+
         AssetTexture texture {
             .width = static_cast<uint32_t>(source.width),
             .height = static_cast<uint32_t>(source.height),
-            .pixels = source.image
+            .pixels = std::move(pixels)
         };
 
         const TextureHandle handle {

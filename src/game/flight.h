@@ -4,7 +4,7 @@
 
 #pragma once
 #include "gameState.h"
-#include "graphics/RenderWorld.h"
+#include "graphics/renderWorld.h"
 
 
 namespace sirius {

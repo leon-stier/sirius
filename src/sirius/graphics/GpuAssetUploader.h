@@ -9,7 +9,7 @@
 #include <glm/vec3.hpp>
 #include <vulkan/vulkan_raii.hpp>
 
-#include "AssetManager.h"
+#include "assetManager.h"
 
 class VulkanContext;
 
@@ -59,7 +59,7 @@ public:
     void Init(VulkanContext& context);
 
     // Uploads an asset into the shared device-local vertex and index buffers.
-    GpuAssetHandle Upload(const ModelAsset& asset);
+    GpuAssetHandle Upload(const ModelAsset& asset, const AssetManager& assetManager);
 
     const GpuAsset& Get(GpuAssetHandle handle) const;
 
@@ -70,25 +70,11 @@ public:
     bool HasBuffers() const noexcept { return vertexBuffer_ != nullptr && indexBuffer_ != nullptr; }
 
 private:
-    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(
-        vk::DeviceSize size,
-        vk::BufferUsageFlags usage,
-        vk::MemoryPropertyFlags properties
-    ) const;
-
     void UploadTextureData(const AssetTexture& texture, GpuTexture& destination);
 
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateTextureImage(uint32_t width, uint32_t height) const;
 
-    vk::raii::ImageView CreateTextureImageView(vk::Image image) const;
-
     uint32_t UploadTexture(TextureHandle handle, const AssetManager& assetManager);
-
-    uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
-
-    vk::raii::CommandBuffer BeginSingleTimeCommands() const;
-
-    void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
     void RebuildBuffers();
 

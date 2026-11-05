@@ -8,9 +8,9 @@
 #include <unordered_map>
 #include <vulkan/vk_platform.h>
 
-#include "AssetManager.h"
-#include "GpuAssetUploader.h"
-#include "RenderWorld.h"
+#include "assetManager.h"
+#include "gpuAssetUploader.h"
+#include "renderWorld.h"
 #include "graphics/camera.h"
 #include "vulkanContext.h"
 
@@ -101,15 +101,14 @@ private:
 
     void CreateImageViews();
 
-    vk::raii::ImageView CreateImageView(vk::Image const& image, vk::Format format, vk::ImageAspectFlags aspectFlags) const;
 
     void CreateDescriptorSetLayout();
+    void CreateMaterialDescriptorSets(GpuAssetHandle handle);
 
     void CreateGraphicsPipeline();
 
     void InitCommandBuffers();
 
-    std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const;
 
     vk::Format FindSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const;
 
@@ -125,7 +124,6 @@ private:
 
     void CreateDescriptorSets();
 
-    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, vk::MemoryPropertyFlags memoryProperties) const;
 
     /////////// Drawing ///////////
     void RecordCommandBuffer(uint32_t imageIndex, uint32_t currentFrameIndex) const;
@@ -137,25 +135,12 @@ private:
     void ProcessCameraEvent(InputEvent event);
 
     //////////// Utils ////////////
-    void TransitionImageLayout(
-        vk::Image image,
-        const vk::raii::CommandBuffer& commandBuffer,
-        vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout,
-        vk::AccessFlags2 srcAccessMask,
-        vk::AccessFlags2 dstAccessMask,
-        vk::PipelineStageFlags2 srcStageMask,
-        vk::PipelineStageFlags2 dstStageMask,
-        vk::ImageAspectFlags imageAspectFlags
-    ) const;
 
-    uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
+
 
     void CopyBuffer(const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) const;
 
-    vk::raii::CommandBuffer BeginSingleTimeCommands() const;
 
-    void EndSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer) const;
 
     VulkanContext* context_{nullptr};
 
@@ -171,6 +156,7 @@ private:
     std::vector<vk::raii::ImageView> swapChainImageViews_;
 
     vk::raii::DescriptorSetLayout descriptorSetLayout_{nullptr};
+    vk::raii::DescriptorSetLayout materialDescriptorSetLayout_{nullptr};
     vk::raii::DescriptorPool descriptorPool_{nullptr};
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline graphicsPipeline_{nullptr};
@@ -180,6 +166,7 @@ private:
     vk::raii::ImageView depthImageView_{nullptr};
 
     std::array<FrameContext, kMaxFramesInFlight> frames_;
+    std::vector<std::vector<vk::raii::DescriptorSet>> materialDescriptorSets_;
 
     vk::raii::CommandPool ephemeralCommandPool_{nullptr};
 

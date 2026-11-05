@@ -14,6 +14,8 @@ add_library(graphics STATIC
         vulkanContext.h
         AssetManager.cpp
         AssetManager.h
+        VulkanUtils.cpp
+        VulkanUtils.h
 )
 
 target_link_libraries(graphics

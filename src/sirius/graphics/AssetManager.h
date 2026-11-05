@@ -5,6 +5,7 @@
 #pragma once
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,7 +50,7 @@ struct AssetTexture {
 };
 
 struct AssetMaterial {
-    glm::vec4 baseColorFactor;
+    glm::vec4 baseColorFactor{1.0f};
     std::optional<TextureHandle> baseColorTexture;
 };
 
