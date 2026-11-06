@@ -26,7 +26,7 @@ void TestGame::Init() {
             angles.push_back(std::atan2(pos.z, pos.x));          // Starting angle
             speeds.push_back(10.0f / radii.back());
             positions.push_back(pos);
-            cubes_.emplace_back(sirius::Renderer::LoadModelInstance("../../resources/cubeTextured.glb", glm::translate(glm::mat4(1.0f), pos)));
+            cubes_.push_back(sirius::Renderer::LoadModelInstance("../../resources/cubeTextured.glb", glm::translate(glm::mat4(1.0f), pos)));
         }
     }
 }

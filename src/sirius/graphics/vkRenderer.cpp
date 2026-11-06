@@ -174,7 +174,7 @@ void VkRenderer::CreateImageViews() {
     swapChainImageViews_.reserve(swapChainImages_.size());
 
     for (const auto& image : swapChainImages_) {
-        swapChainImageViews_.emplace_back(VulkanUtils::CreateImageView(*context_, image, swapChainSurfaceFormat_.surfaceFormat.format, vk::ImageAspectFlagBits::eColor));
+        swapChainImageViews_.push_back(VulkanUtils::CreateImageView(*context_, image, swapChainSurfaceFormat_.surfaceFormat.format, vk::ImageAspectFlagBits::eColor));
     }
 }
 
